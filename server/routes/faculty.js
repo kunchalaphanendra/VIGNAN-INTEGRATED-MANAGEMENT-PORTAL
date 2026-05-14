@@ -618,15 +618,21 @@ router.post('/sessions/sync-offline', async (req, res) => {
             sessionId = result.insertId;
         }
 
-        // ── Save attendance records ─────────────────────────────────────────
-        for (const r of records) {
+        // ── Save attendance records (bulk INSERT for atomicity) ──────────────
+        if (records.length > 0) {
+            const placeholders = records.map(() => '(?, ?, ?, ?, ?, ?)').join(', ');
+            const values = records.flatMap(r => [
+                r.student_id, assignment_id, dateStr,
+                period_number ?? null, r.status, req.user.id
+            ]);
             await db.query(
                 `INSERT INTO attendance (student_id, assignment_id, date, period_number, status, marked_by)
-                 VALUES (?, ?, ?, ?, ?, ?)
+                 VALUES ${placeholders}
                  ON DUPLICATE KEY UPDATE status=VALUES(status), marked_by=VALUES(marked_by)`,
-                [r.student_id, assignment_id, dateStr, period_number ?? null, r.status, req.user.id]
+                values
             );
         }
+
 
         res.json({
             message:        'Offline attendance synced',
