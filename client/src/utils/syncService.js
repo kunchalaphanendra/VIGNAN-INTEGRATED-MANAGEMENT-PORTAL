@@ -101,8 +101,11 @@ export async function runSync(onDone) {
                 });
 
                 if (response.ok) {
+                    const data = await response.json().catch(() => ({}));
                     await markSynced(entry.local_id);
                     results.synced++;
+                    // Track if any were outside-window (for toast messaging)
+                    if (data.outside_window) results.outsideWindow = (results.outsideWindow || 0) + 1;
                 } else if (response.status === 409) {
                     const data = await response.json().catch(() => ({}));
                     const msg  = data.taken_by

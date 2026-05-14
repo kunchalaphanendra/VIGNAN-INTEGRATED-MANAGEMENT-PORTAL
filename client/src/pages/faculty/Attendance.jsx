@@ -899,18 +899,21 @@ export default function FacultyAttendance() {
     useEffect(() => {
         if (!wasOffline) return;
         setToast({ message: '🔄 Internet restored — syncing offline attendance…', type: 'warn' });
-        runSync(({ synced, conflicts, errors }) => {
+        runSync(({ synced, conflicts, errors, outsideWindow }) => {
             refreshPendingCount();
-            if (synced > 0 && errors === 0 && conflicts === 0)
-                setToast({ message: `✅ ${synced} offline record(s) synced successfully!`, type: 'success' });
-            else if (synced > 0 && conflicts > 0)
-                setToast({ message: `✅ Synced ${synced}. ⚠️ ${conflicts} conflict(s) flagged to HOD.`, type: 'warn' });
-            else if (errors > 0)
+            if (errors > 0)
                 setToast({ message: `❌ Sync failed. Go to ⏳ Sync Queue → Sync Now to retry.`, type: 'warn' });
+            else if (conflicts > 0)
+                setToast({ message: `✅ Synced ${synced}. ⚠️ ${conflicts} conflict(s) flagged to HOD.`, type: 'warn' });
+            else if (outsideWindow > 0)
+                setToast({ message: `⚠️ ${synced} record(s) synced — ${outsideWindow} marked outside window. Pending HOD confirmation.`, type: 'warn' });
+            else if (synced > 0)
+                setToast({ message: `✅ ${synced} offline record(s) synced successfully!`, type: 'success' });
             else
                 setToast(null);
         });
     }, [wasOffline, refreshPendingCount]);
+
 
     // Count saved periods per assignment
     const periodsDoneFor = (assignmentId) => (savedSessionsMap[assignmentId] || []).length;

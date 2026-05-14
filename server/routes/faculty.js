@@ -560,6 +560,39 @@ router.post('/sessions/sync-offline', async (req, res) => {
             }
         }
 
+        // ── Determine if saved_at was within the period window ─────────────────
+        // Compare timestamp when faculty MARKED (saved_at) vs the period window.
+        // Prevents gaming: going offline after period ends to submit fake attendance.
+        let isOutsideWindow = false;
+        let windowNote      = null;
+
+        if (start_time && end_time && saved_at) {
+            try {
+                const [periodRows] = await db.query(
+                    `SELECT window_open_before, window_close_after
+                     FROM class_periods WHERE department_id=? AND period_number=? LIMIT 1`,
+                    [deptId, period_number ?? null]
+                ).catch(() => [[]]);
+
+                const openBefore  = periodRows[0]?.window_open_before ?? 5;
+                const closeAfter  = periodRows[0]?.window_close_after ?? 10;
+
+                const toMin = (t) => { const [h,m] = t.split(':').map(Number); return h*60+m; };
+                const savedDate   = new Date(saved_at);
+                const savedMin    = savedDate.getHours() * 60 + savedDate.getMinutes();
+                const windowStart = toMin(start_time) - openBefore;
+                const windowEnd   = toMin(end_time)   + closeAfter;
+
+                isOutsideWindow = savedMin < windowStart || savedMin > windowEnd;
+
+                if (isOutsideWindow) {
+                    const hh = String(savedDate.getHours()).padStart(2,'0');
+                    const mm = String(savedDate.getMinutes()).padStart(2,'0');
+                    windowNote = `Offline attendance marked at ${hh}:${mm} — outside Period ${period_number} window (${start_time.slice(0,5)}–${end_time.slice(0,5)}). Pending HOD confirmation.`;
+                }
+            } catch { /* non-fatal — default to within-window */ }
+        }
+
         // ── Check if this faculty already submitted this period (idempotent) ──
         const [existing] = await db.query(
             `SELECT id FROM attendance_sessions
@@ -569,20 +602,23 @@ router.post('/sessions/sync-offline', async (req, res) => {
 
         let sessionId;
         if (existing.length > 0) {
-            sessionId = existing[0].id; // Already created — just upsert attendance
+            sessionId = existing[0].id;
         } else {
             const [result] = await db.query(
                 `INSERT INTO attendance_sessions
-                 (assignment_id, faculty_id, department_id, year, section, session_date, period_number, start_time, end_time, outside_window, hod_confirmed, created_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)`,
+                 (assignment_id, faculty_id, department_id, year, section, session_date,
+                  period_number, start_time, end_time, outside_window, hod_confirmed, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [assignment_id, req.user.id, deptId, year, section, dateStr,
-                 period_number ?? null, start_time ?? null, end_time ?? null, req.user.id]
+                 period_number ?? null, start_time ?? null, end_time ?? null,
+                 isOutsideWindow ? 1 : 0,
+                 isOutsideWindow ? null : 1,
+                 req.user.id]
             );
-
             sessionId = result.insertId;
         }
 
-        // ── Save attendance records ───────────────────────────────────────────
+        // ── Save attendance records ─────────────────────────────────────────
         for (const r of records) {
             await db.query(
                 `INSERT INTO attendance (student_id, assignment_id, date, period_number, status, marked_by)
@@ -592,7 +628,13 @@ router.post('/sessions/sync-offline', async (req, res) => {
             );
         }
 
-        res.json({ message: 'Offline attendance synced', session_id: sessionId, count: records.length });
+        res.json({
+            message:        'Offline attendance synced',
+            session_id:     sessionId,
+            count:          records.length,
+            outside_window: isOutsideWindow,
+            window_note:    windowNote,
+        });
     } catch (err) {
         console.error('sync-offline error:', err);
         if (err.code === 'ER_DUP_ENTRY')
