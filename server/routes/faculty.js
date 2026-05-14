@@ -573,11 +573,12 @@ router.post('/sessions/sync-offline', async (req, res) => {
         } else {
             const [result] = await db.query(
                 `INSERT INTO attendance_sessions
-                 (assignment_id, faculty_id, department_id, year, section, session_date, period_number, start_time, end_time, outside_window, hod_confirmed)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
+                 (assignment_id, faculty_id, department_id, year, section, session_date, period_number, start_time, end_time, outside_window, hod_confirmed, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)`,
                 [assignment_id, req.user.id, deptId, year, section, dateStr,
-                 period_number ?? null, start_time ?? null, end_time ?? null]
+                 period_number ?? null, start_time ?? null, end_time ?? null, req.user.id]
             );
+
             sessionId = result.insertId;
         }
 
