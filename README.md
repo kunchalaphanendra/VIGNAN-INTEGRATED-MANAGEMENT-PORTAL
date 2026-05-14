@@ -13,7 +13,7 @@
 
 ---
 
-**Created by [Kunchala Phanendra](https://github.com/kunchalaphanendra)**
+
 
 </div>
 
