@@ -339,16 +339,49 @@ function AttendanceGrid({ assignment, period, onSave, onBack, isOnline = true, o
     const inSlot = curMins >= pStart && curMins <= pEnd;
 
     useEffect(() => {
+        const CACHE_KEY = `vimp_students_${assignment.id}`;
         setLoading(true);
+
+        // Load from cache immediately (shows students even before API responds)
+        const loadFromCache = () => {
+            try {
+                const raw = localStorage.getItem(CACHE_KEY);
+                if (raw) {
+                    const studs = JSON.parse(raw);
+                    if (studs.length > 0) {
+                        setStudents(studs);
+                        setRecords(studs.map(s => ({ student_id: s.student_id, roll_number: s.roll_number, full_name: s.full_name, status: 'present' })));
+                        return true;
+                    }
+                }
+            } catch { /* ignore */ }
+            return false;
+        };
+
+        if (!navigator.onLine) {
+            // Offline — use cache only
+            const hadCache = loadFromCache();
+            if (!hadCache) setError('Offline & no student data cached yet. Open this class once while online first.');
+            setLoading(false);
+            return;
+        }
+
+        // Online — fetch fresh and update cache
         apiFetch(`/api/faculty/students/${assignment.id}`)
             .then(data => {
                 const studs = data.students || [];
+                try { localStorage.setItem(CACHE_KEY, JSON.stringify(studs)); } catch { /* ignore */ }
                 setStudents(studs);
                 setRecords(studs.map(s => ({ student_id: s.student_id, roll_number: s.roll_number, full_name: s.full_name, status: 'present' })));
             })
-            .catch(err => setError('Failed to load students: ' + err.message))
+            .catch(err => {
+                // Network error even though online — try cache as fallback
+                const hadCache = loadFromCache();
+                if (!hadCache) setError('Failed to load students: ' + err.message);
+            })
             .finally(() => setLoading(false));
     }, [assignment.id]);
+
 
     const presentCount = records.filter(r => r.status === 'present').length;
     const absentCount  = records.filter(r => r.status === 'absent').length;
