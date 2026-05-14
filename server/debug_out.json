@@ -1,0 +1,232 @@
+{
+  "sessions": [
+    {
+      "id": 19,
+      "assignment_id": 7,
+      "faculty_id": 14,
+      "department_id": 9,
+      "year": 2,
+      "section": "B",
+      "session_date": "2026-03-25T18:30:00.000Z",
+      "period_number": 1,
+      "outside_window": 0,
+      "hod_confirmed": null,
+      "start_time": "09:00:00",
+      "login_id": "VIG-FAC-004"
+    },
+    {
+      "id": 18,
+      "assignment_id": 5,
+      "faculty_id": 7,
+      "department_id": 9,
+      "year": 2,
+      "section": "B",
+      "session_date": "2026-03-25T18:30:00.000Z",
+      "period_number": 1,
+      "outside_window": 0,
+      "hod_confirmed": null,
+      "start_time": "09:00:00",
+      "login_id": "VIG-FAC-002"
+    },
+    {
+      "id": 17,
+      "assignment_id": 4,
+      "faculty_id": 5,
+      "department_id": 9,
+      "year": 2,
+      "section": "B",
+      "session_date": "2026-03-25T18:30:00.000Z",
+      "period_number": 1,
+      "outside_window": 0,
+      "hod_confirmed": null,
+      "start_time": "09:00:00",
+      "login_id": "VIG-FAC-001"
+    }
+  ],
+  "periods": [
+    {
+      "id": 1,
+      "department_id": 1,
+      "period_number": 1,
+      "start_time": "23:48:00",
+      "end_time": "00:48:00",
+      "window_open_before": 5,
+      "window_close_after": 10
+    },
+    {
+      "id": 2,
+      "department_id": 1,
+      "period_number": 2,
+      "start_time": "10:00:00",
+      "end_time": "11:00:00",
+      "window_open_before": 5,
+      "window_close_after": 10
+    },
+    {
+      "id": 3,
+      "department_id": 1,
+      "period_number": 3,
+      "start_time": "23:48:00",
+      "end_time": "00:48:00",
+      "window_open_before": 5,
+      "window_close_after": 10
+    },
+    {
+      "id": 4,
+      "department_id": 9,
+      "period_number": 1,
+      "start_time": "08:45:00",
+      "end_time": "09:35:00",
+      "window_open_before": 5,
+      "window_close_after": 10
+    },
+    {
+      "id": 5,
+      "department_id": 9,
+      "period_number": 2,
+      "start_time": "09:35:00",
+      "end_time": "10:25:00",
+      "window_open_before": 5,
+      "window_close_after": 10
+    },
+    {
+      "id": 6,
+      "department_id": 9,
+      "period_number": 3,
+      "start_time": "10:40:00",
+      "end_time": "11:30:00",
+      "window_open_before": 5,
+      "window_close_after": 10
+    },
+    {
+      "id": 7,
+      "department_id": 9,
+      "period_number": 4,
+      "start_time": "11:30:00",
+      "end_time": "12:20:00",
+      "window_open_before": 5,
+      "window_close_after": 10
+    },
+    {
+      "id": 8,
+      "department_id": 9,
+      "period_number": 5,
+      "start_time": "12:20:00",
+      "end_time": "13:10:00",
+      "window_open_before": 5,
+      "window_close_after": 10
+    },
+    {
+      "id": 9,
+      "department_id": 9,
+      "period_number": 6,
+      "start_time": "02:00:00",
+      "end_time": "02:45:00",
+      "window_open_before": 5,
+      "window_close_after": 10
+    },
+    {
+      "id": 10,
+      "department_id": 9,
+      "period_number": 7,
+      "start_time": "02:45:00",
+      "end_time": "03:30:00",
+      "window_open_before": 5,
+      "window_close_after": 10
+    }
+  ],
+  "indexes": [
+    {
+      "INDEX_NAME": "created_by",
+      "COLUMN_NAME": "created_by"
+    },
+    {
+      "INDEX_NAME": "PRIMARY",
+      "COLUMN_NAME": "id"
+    },
+    {
+      "INDEX_NAME": "uq_session",
+      "COLUMN_NAME": "assignment_id"
+    },
+    {
+      "INDEX_NAME": "uq_session",
+      "COLUMN_NAME": "session_date"
+    },
+    {
+      "INDEX_NAME": "uq_session",
+      "COLUMN_NAME": "period_number"
+    }
+  ],
+  "attendance": [
+    {
+      "id": 119,
+      "student_id": 10,
+      "assignment_id": 9,
+      "date": "2026-03-26T18:30:00.000Z",
+      "status": "present"
+    },
+    {
+      "id": 118,
+      "student_id": 17,
+      "assignment_id": 9,
+      "date": "2026-03-26T18:30:00.000Z",
+      "status": "present"
+    },
+    {
+      "id": 117,
+      "student_id": 12,
+      "assignment_id": 9,
+      "date": "2026-03-26T18:30:00.000Z",
+      "status": "present"
+    },
+    {
+      "id": 116,
+      "student_id": 11,
+      "assignment_id": 9,
+      "date": "2026-03-26T18:30:00.000Z",
+      "status": "present"
+    },
+    {
+      "id": 115,
+      "student_id": 6,
+      "assignment_id": 9,
+      "date": "2026-03-26T18:30:00.000Z",
+      "status": "present"
+    },
+    {
+      "id": 114,
+      "student_id": 8,
+      "assignment_id": 9,
+      "date": "2026-03-26T18:30:00.000Z",
+      "status": "present"
+    },
+    {
+      "id": 113,
+      "student_id": 9,
+      "assignment_id": 9,
+      "date": "2026-03-26T18:30:00.000Z",
+      "status": "present"
+    },
+    {
+      "id": 112,
+      "student_id": 10,
+      "assignment_id": 5,
+      "date": "2026-03-26T18:30:00.000Z",
+      "status": "present"
+    },
+    {
+      "id": 111,
+      "student_id": 17,
+      "assignment_id": 5,
+      "date": "2026-03-26T18:30:00.000Z",
+      "status": "present"
+    },
+    {
+      "id": 110,
+      "student_id": 12,
+      "assignment_id": 5,
+      "date": "2026-03-26T18:30:00.000Z",
+      "status": "present"
+    }
+  ]
+}

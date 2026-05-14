@@ -1,0 +1,20 @@
+﻿[dotenv@17.3.1] injecting env (0) from .env -- tip: ΓÜÖ∩╕Å  load multiple .env files with { path: ['.env.local', '.env'] }
+[dotenv@17.3.1] injecting env (15) from ..\.env -- tip: ≡ƒöÉ prevent committing .env to code: https://dotenvx.com/precommit
+Γ£à MySQL connected successfully
+=== UNPUBLISHED MARKS (8 records) ===
+  [10] 24891A6770 UDAY | Data base management system | MID1 | 58.00
+  [11] 24891A6783 Vikranth | Data base management system | MID1 | 95.00
+  [12] 24891A67A0 Phanendra | Data base management system | MID1 | 89.00
+  [13] 24891A67A8 AKSHAY | Data base management system | MID1 | 85.00
+  [14] 24891A67B3 Sai charan reddy | Data base management system | MID1 | 59.00
+  [15] 24891A67B5 PUTTA venkata krishna reddy | Data base management system | MID1 | 40.00
+  [16] 24891A67C0 SAI LIKITH | Data base management system | MID1 | 3.00
+  [1] 24891A67A0 Phanendra | Mathematics | M3 | 90.00
+
+Published 8 records.
+
+=== Phanendra marks now ===
+  [12] Data base management system | MID1 | 89.00 | pub=1
+  [40] Data base management system | MID2 | 85.00 | pub=1
+  [1] Mathematics | M3 | 90.00 | pub=1
+  [33] Mathematics | MID1 | 58.00 | pub=1

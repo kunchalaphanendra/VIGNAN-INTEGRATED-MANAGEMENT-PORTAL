@@ -1,0 +1,8 @@
+﻿[dotenv@17.3.1] injecting env (0) from .env -- tip: ΓÜÖ∩╕Å  load multiple .env files with { path: ['.env.local', '.env'] }
+[dotenv@17.3.1] injecting env (15) from ..\.env -- tip: ≡ƒöÉ encrypt with Dotenvx: https://dotenvx.com
+Γ£à MySQL connected successfully
+=== MARKS SUMMARY ===
+Data base management system | MID1 | 7 students: 24891A6770,24891A6783,24891A67A0,24891A67A8,24891A67B3,24891A67B5,24891A67C0
+Data base management system | MID2 | 7 students: 24891A6770,24891A6783,24891A67A0,24891A67A8,24891A67B3,24891A67B5,24891A67C0
+Mathematics | M3 | 1 students: 24891A67A0
+Mathematics | MID1 | 7 students: 24891A6770,24891A6783,24891A67A0,24891A67A8,24891A67B3,24891A67B5,24891A67C0

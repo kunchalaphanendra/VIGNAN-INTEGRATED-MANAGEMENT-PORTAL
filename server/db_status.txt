@@ -1,0 +1,10 @@
+Assignments:
+{"id":4,"department_id":9,"year":2,"section":"B","fac":"Khaleel"}
+{"id":5,"department_id":9,"year":2,"section":"B","fac":"Rama devi"}
+{"id":7,"department_id":9,"year":2,"section":"B","fac":"Kusuma"}
+{"id":8,"department_id":9,"year":2,"section":"B","fac":"N. Najarjuna"}
+{"id":9,"department_id":9,"year":2,"section":"B","fac":"P.Aparna"}
+{"id":10,"department_id":9,"year":2,"section":"B","fac":"priyanka"}
+{"id":11,"department_id":9,"year":2,"section":"B","fac":"SHESHI"}
+
+Sessions:

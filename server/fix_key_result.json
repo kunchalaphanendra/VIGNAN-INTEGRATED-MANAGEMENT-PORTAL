@@ -1,0 +1,42 @@
+[
+  {
+    "INDEX_NAME": "created_by",
+    "COLUMN_NAME": "created_by"
+  },
+  {
+    "INDEX_NAME": "PRIMARY",
+    "COLUMN_NAME": "id"
+  },
+  {
+    "INDEX_NAME": "uniq_class_period",
+    "COLUMN_NAME": "department_id"
+  },
+  {
+    "INDEX_NAME": "uniq_class_period",
+    "COLUMN_NAME": "year"
+  },
+  {
+    "INDEX_NAME": "uniq_class_period",
+    "COLUMN_NAME": "section"
+  },
+  {
+    "INDEX_NAME": "uniq_class_period",
+    "COLUMN_NAME": "session_date"
+  },
+  {
+    "INDEX_NAME": "uniq_class_period",
+    "COLUMN_NAME": "period_number"
+  },
+  {
+    "INDEX_NAME": "uq_session",
+    "COLUMN_NAME": "assignment_id"
+  },
+  {
+    "INDEX_NAME": "uq_session",
+    "COLUMN_NAME": "session_date"
+  },
+  {
+    "INDEX_NAME": "uq_session",
+    "COLUMN_NAME": "period_number"
+  }
+]
