@@ -16,11 +16,15 @@ function fmtTime(t) {
     return `${h % 12 || 12}:${pad2(m)} ${ampm}`;
 }
 
-async function apiFetch(path) {
-    const res = await fetch(path, { credentials: 'include' });
+async function apiFetch(path, options = {}) {
+    const token = localStorage.getItem('vimp_token');
+    const headers = { 'Content-Type': 'application/json', ...options.headers };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(path, { ...options, headers, credentials: 'include' });
     if (!res.ok) throw new Error(`API error ${res.status}`);
     return res.json();
 }
+
 
 // ─── Toast ────────────────────────────────────────────────────────────────
 function Toast({ message, type = 'success', onDone }) {
@@ -419,10 +423,8 @@ function AttendanceGrid({ assignment, period, onSave, onBack, isOnline = true, o
         setSaving(true);
         try {
             // 1. Create session with selected period's times
-            const sessionRes = await fetch('/api/faculty/sessions', {
+            const sessionRes = await apiFetch('/api/faculty/sessions', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
                 body: JSON.stringify({
                     assignment_id:  assignment.id,
                     session_date:   todayISO(),
@@ -430,47 +432,31 @@ function AttendanceGrid({ assignment, period, onSave, onBack, isOnline = true, o
                     start_time:     period.start_time,
                     end_time:       period.end_time,
                 }),
+            }).catch(async err => {
+                // apiFetch throws on non-ok — check status from error
+                throw err;
             });
 
-            // ── Handle 409: another faculty already took this period ──
-            if (sessionRes.status === 409) {
-                const errData = await sessionRes.json().catch(() => ({}));
-                const takenBy = errData.taken_by || 'another faculty member';
-                alert(`⛔ Cannot save: Period ${period.period_number} attendance was already marked by ${takenBy}. Contact the HOD to override.`);
-                setSaving(false);
-                return;
-            }
+            // sessionRes is already parsed JSON from apiFetch
+            const sessionId = sessionRes?.session_id ?? null;
+            let outsideWindow = sessionRes?.outside_window ?? false;
+            let windowNote = sessionRes?.window_note ?? null;
 
-            let sessionId = null;
-            let outsideWindow = false;
-            let windowNote = null;
 
-            if (sessionRes.ok) {
-                const sData = await sessionRes.json();
-                sessionId = sData.session_id;
-            }
+            // sessionId and window info already extracted from sessionRes above
+
 
             if (sessionId) {
-                const attRes = await fetch(`/api/faculty/sessions/${sessionId}/attendance`, {
+                const attData = await apiFetch(`/api/faculty/sessions/${sessionId}/attendance`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
                     body: JSON.stringify({ records: records.map(r => ({ student_id: r.student_id, status: r.status })) }),
                 });
-                if (attRes.ok) {
-                    const attData = await attRes.json();
-                    outsideWindow = attData.outside_window || false;
-                    windowNote    = attData.window_note || null;
-                } else {
-                    const errData = await attRes.json().catch(() => ({}));
-                    throw new Error(errData.error || `Server error ${attRes.status}`);
-                }
+                outsideWindow = attData.outside_window || false;
+                windowNote    = attData.window_note || null;
             } else {
                 // Fallback: direct attendance
-                await fetch('/api/faculty/attendance', {
+                await apiFetch('/api/faculty/attendance', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
                     body: JSON.stringify({
                         assignment_id: assignment.id,
                         date: todayISO(),

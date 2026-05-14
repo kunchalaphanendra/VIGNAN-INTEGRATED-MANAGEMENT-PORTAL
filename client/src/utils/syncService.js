@@ -2,9 +2,6 @@
  * syncService.js
  * Auto-syncs pending offline attendance entries to the server
  * when internet connection is restored.
- *
- * Call runSync() whenever isOnline becomes true after being offline.
- * It is safe to call multiple times — it won't double-submit.
  */
 
 import {
@@ -16,9 +13,17 @@ import {
 
 let isSyncing = false; // guard against concurrent sync runs
 
+// Helper: authenticated fetch that sends Bearer token (same as api.js)
+async function authFetch(url, options = {}) {
+    const token = localStorage.getItem('vimp_token');
+    const headers = { 'Content-Type': 'application/json', ...options.headers };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return fetch(url, { ...options, headers, credentials: 'include' });
+}
+
 /**
  * Sync all pending offline entries to the server.
- * @param {Function} onProgress  Called with { synced, conflicts, errors, total }
+ * @param {Function} onProgress  Called with { synced, conflicts, errors, total, phase }
  * @returns {Promise<{ synced: number, conflicts: number, errors: number }>}
  */
 export async function runSync(onProgress) {
@@ -39,10 +44,8 @@ export async function runSync(onProgress) {
 
         for (const entry of pending) {
             try {
-                const response = await fetch('/api/faculty/sessions/sync-offline', {
+                const response = await authFetch('/api/faculty/sessions/sync-offline', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
                     body: JSON.stringify({
                         assignment_id:  entry.assignment_id,
                         session_date:   entry.session_date,
@@ -50,7 +53,7 @@ export async function runSync(onProgress) {
                         start_time:     entry.start_time,
                         end_time:       entry.end_time,
                         records:        entry.records,
-                        saved_at:       entry.saved_at, // for audit — when was it marked offline
+                        saved_at:       entry.saved_at,
                     }),
                 });
 
@@ -58,7 +61,6 @@ export async function runSync(onProgress) {
                     await markSynced(entry.local_id);
                     results.synced++;
                 } else if (response.status === 409) {
-                    // Conflict — another faculty already marked this period
                     const data = await response.json().catch(() => ({}));
                     const msg  = data.taken_by
                         ? `Conflict with ${data.taken_by} — flagged to HOD`
@@ -66,7 +68,6 @@ export async function runSync(onProgress) {
                     await markConflict(entry.local_id, msg);
                     results.conflicts++;
                 } else if (response.status === 401 || response.status === 403) {
-                    // Session expired — don't mark as error, just stop for now
                     await markSyncError(entry.local_id, 'Session expired — please log in again');
                     results.errors++;
                 } else {
@@ -75,7 +76,6 @@ export async function runSync(onProgress) {
                     results.errors++;
                 }
             } catch (networkErr) {
-                // Still no internet mid-sync
                 await markSyncError(entry.local_id, 'Network error — will retry');
                 results.errors++;
             }
