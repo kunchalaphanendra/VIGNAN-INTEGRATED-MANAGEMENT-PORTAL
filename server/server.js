@@ -9,7 +9,7 @@ const app = express();
 // Middleware
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests from any localhost port (dev) or the configured CLIENT_URL
+        // Allow localhost OR any local network IP (192.168.x.x) for mobile testing
         const allowed = [
             process.env.CLIENT_URL || 'http://localhost:5173',
             'http://localhost:5173',
@@ -18,7 +18,11 @@ app.use(cors({
             'http://127.0.0.1:5173',
             'http://127.0.0.1:5174',
         ];
-        if (!origin || allowed.includes(origin)) {
+        const isLocalNetwork = origin && (
+            /^http:\/\/192\.168\.\d+\.\d+(:\d+)?$/.test(origin) ||
+            /^http:\/\/10\.\d+\.\d+\.\d+(:\d+)?$/.test(origin)
+        );
+        if (!origin || allowed.includes(origin) || isLocalNetwork) {
             callback(null, true);
         } else {
             callback(new Error('CORS: ' + origin + ' not allowed'));

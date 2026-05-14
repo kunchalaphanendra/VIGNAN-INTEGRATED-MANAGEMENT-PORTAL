@@ -17,6 +17,7 @@ export function AuthProvider({ children }) {
             setUser(res.data.user);
         } catch {
             setUser(null);
+            localStorage.removeItem('vimp_token');
         } finally {
             setLoading(false);
         }
@@ -24,12 +25,17 @@ export function AuthProvider({ children }) {
 
     const login = async (login_id, password, role) => {
         const res = await api.post('/auth/login', { login_id, password, role });
+        // Store token in localStorage so Bearer auth works on mobile/network access
+        if (res.data.token) {
+            localStorage.setItem('vimp_token', res.data.token);
+        }
         setUser(res.data.user);
         return res.data;
     };
 
     const logout = async () => {
         await api.post('/auth/logout');
+        localStorage.removeItem('vimp_token');
         setUser(null);
     };
 

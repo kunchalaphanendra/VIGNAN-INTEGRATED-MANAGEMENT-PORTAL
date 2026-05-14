@@ -1,7 +1,13 @@
 const jwt = require('jsonwebtoken');
 
 module.exports = (req, res, next) => {
-    const token = req.cookies.token;
+    // Accept token from: 1) cookie, 2) Authorization: Bearer header
+    // This allows mobile/network access where cookies may not travel through the proxy
+    const token = req.cookies?.token
+        || (req.headers.authorization?.startsWith('Bearer ')
+            ? req.headers.authorization.slice(7)
+            : null);
+
     if (!token) {
         return res.status(401).json({ error: 'Unauthorized — no token provided' });
     }

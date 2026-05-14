@@ -6,13 +6,22 @@ const api = axios.create({
     headers: { 'Content-Type': 'application/json' }
 });
 
+// Attach stored token as Authorization header on every request
+// This ensures mobile/network access works even when cookies don't travel through proxy
+api.interceptors.request.use(config => {
+    const token = localStorage.getItem('vimp_token');
+    if (token) {
+        config.headers['Authorization'] = `Bearer ${token}`;
+    }
+    return config;
+});
+
 // Response interceptor for auth errors
 let _isRedirecting = false;
 api.interceptors.response.use(
     response => response,
     error => {
         const url = error.config?.url || '';
-        // Only redirect on 401 for non-auth-check requests, and prevent multiple redirects
         if (
             !_isRedirecting &&
             error.response &&
@@ -20,6 +29,7 @@ api.interceptors.response.use(
             !url.includes('/auth/me')
         ) {
             _isRedirecting = true;
+            localStorage.removeItem('vimp_token');
             window.location.href = '/';
         }
         return Promise.reject(error);
