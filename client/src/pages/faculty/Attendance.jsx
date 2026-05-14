@@ -802,6 +802,14 @@ export default function FacultyAttendance() {
         setView(VIEW.GRID);
     }, []);
 
+    // ── Refresh pending offline count ────────────────────────────────────
+    // IMPORTANT: declared BEFORE handleSaveAttendance to avoid TDZ ReferenceError
+    const refreshPendingCount = useCallback(async () => {
+        try { setPendingCount(await countUnsynced()); } catch { }
+    }, []);
+
+    useEffect(() => { refreshPendingCount(); }, [refreshPendingCount]);
+
     const handleSaveAttendance = useCallback(async (assignmentId, outsideWindow, windowNote, wasOfflineSave = false) => {
         const a = assignments.find(x => x.id === assignmentId);
         const label = `${a?.subject_name || 'Subject'} · P${selectedPeriod?.period_number} · Y${a?.year} Sec ${a?.section}`;
@@ -817,13 +825,6 @@ export default function FacultyAttendance() {
         setSelectedPeriod(null);
         setView(VIEW.PERIOD);
     }, [assignments, selectedPeriod, refreshSessions, refreshPendingCount]);
-
-    // ── Refresh pending offline count ────────────────────────────────────
-    const refreshPendingCount = useCallback(async () => {
-        try { setPendingCount(await countUnsynced()); } catch { }
-    }, []);
-
-    useEffect(() => { refreshPendingCount(); }, [refreshPendingCount]);
 
     // Auto-sync when internet returns
     useEffect(() => {
