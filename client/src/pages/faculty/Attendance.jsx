@@ -899,22 +899,18 @@ export default function FacultyAttendance() {
     useEffect(() => {
         if (!wasOffline) return;
         setToast({ message: '🔄 Internet restored — syncing offline attendance…', type: 'warn' });
-        runSync(({ synced, conflicts, errors, phase }) => {
-            if (phase !== 'done') return;
+        runSync(({ synced, conflicts, errors }) => {
             refreshPendingCount();
-            if (synced > 0 && conflicts === 0 && errors === 0)
+            if (synced > 0 && errors === 0 && conflicts === 0)
                 setToast({ message: `✅ ${synced} offline record(s) synced successfully!`, type: 'success' });
             else if (synced > 0 && conflicts > 0)
                 setToast({ message: `✅ Synced ${synced}. ⚠️ ${conflicts} conflict(s) flagged to HOD.`, type: 'warn' });
             else if (errors > 0)
-                setToast({ message: `❌ Sync failed (${errors} error${errors > 1 ? 's' : ''}). Go to ⏳ Sync Queue → Sync Now to retry.`, type: 'warn' });
-            else if (conflicts > 0)
-                setToast({ message: `⚠️ ${conflicts} conflict(s) flagged to HOD for resolution.`, type: 'warn' });
+                setToast({ message: `❌ Sync failed. Go to ⏳ Sync Queue → Sync Now to retry.`, type: 'warn' });
             else
-                setToast(null); // nothing was pending
+                setToast(null);
         });
     }, [wasOffline, refreshPendingCount]);
-
 
     // Count saved periods per assignment
     const periodsDoneFor = (assignmentId) => (savedSessionsMap[assignmentId] || []).length;
@@ -1033,10 +1029,16 @@ export default function FacultyAttendance() {
                             onManualSync={async () => {
                                 if (!isOnline) { setToast({ message: '📵 Still offline — sync will happen automatically when internet returns.', type: 'warn' }); return; }
                                 setToast({ message: '🔄 Syncing…', type: 'warn' });
-                                const result = await runSync(async () => { const e = await getAllOfflineEntries(); setOfflineEntries(e); await refreshPendingCount(); });
-                                const e = await getAllOfflineEntries(); setOfflineEntries(e); await refreshPendingCount();
-                                if (result.conflicts > 0) setToast({ message: `✅ Synced ${result.synced}. ⚠️ ${result.conflicts} conflict(s) flagged to HOD.`, type: 'warn' });
-                                else setToast({ message: `✅ ${result.synced} record(s) synced!`, type: 'success' });
+                                const result = await runSync();
+                                const e = await getAllOfflineEntries();
+                                setOfflineEntries(e);
+                                await refreshPendingCount();
+                                if (result.errors > 0)
+                                    setToast({ message: `❌ Sync failed. Check your connection and try again.`, type: 'warn' });
+                                else if (result.conflicts > 0)
+                                    setToast({ message: `✅ Synced ${result.synced}. ⚠️ ${result.conflicts} conflict(s) flagged to HOD.`, type: 'warn' });
+                                else
+                                    setToast({ message: `✅ ${result.synced} record(s) synced!`, type: 'success' });
                             }}
                         />
                     ) : activeTab === 'mark' ? (
