@@ -53,6 +53,10 @@ export default function HodAttendance() {
     const [unlockTarget,  setUnlockTarget]  = useState(null);
     const [unlockingId,   setUnlockingId]   = useState(null);
     const [toast,         setToast]         = useState(null);
+    // Offline conflicts
+    const [conflicts,     setConflicts]     = useState([]);
+    const [conflictsLoaded, setConflictsLoaded] = useState(false);
+    const [resolving,     setResolving]     = useState(null); // conflict id being resolved
 
     useEffect(() => { load(); }, []);
 
@@ -79,7 +83,28 @@ export default function HodAttendance() {
 
     useEffect(() => {
         if (tab === 'locks') loadLocks(locksDate);
+        if (tab === 'conflicts' && !conflictsLoaded) loadConflicts();
     }, [tab, locksDate, loadLocks]);
+
+    const loadConflicts = async () => {
+        try {
+            const r = await api.get('/hod/attendance-conflicts');
+            setConflicts(r.data.conflicts || []);
+            setConflictsLoaded(true);
+        } catch { setConflicts([]); setConflictsLoaded(true); }
+    };
+
+    const handleResolve = async (conflictId, resolution) => {
+        setResolving(conflictId);
+        try {
+            await api.post(`/hod/attendance-conflicts/${conflictId}/resolve`, { resolution });
+            setConflicts(prev => prev.filter(c => c.id !== conflictId));
+            const label = resolution === 'faculty_a' ? 'Original (online) attendance kept.' : 'Offline submission accepted.';
+            setToast({ msg: `✅ Conflict resolved — ${label}`, type: 'success' });
+        } catch (err) {
+            setToast({ msg: '❌ Failed: ' + (err.response?.data?.error || err.message), type: 'error' });
+        } finally { setResolving(null); }
+    };
 
     const handleConfirm = async (sessionId) => {
         setConfirming(sessionId);
@@ -133,6 +158,7 @@ export default function HodAttendance() {
     const pendingAudit   = audit.filter(r => !r.hod_confirmed).length;
     const confirmedAudit = audit.filter(r =>  r.hod_confirmed).length;
     const isToday        = locksDate === new Date().toLocaleDateString('en-CA');
+    const pendingConflicts = conflicts.length;
 
     if (loading) return <DashboardLayout><LoadingSpinner /></DashboardLayout>;
 
@@ -181,6 +207,7 @@ export default function HodAttendance() {
                         { label: '✅ HOD Confirmed',   value: confirmedAudit, color: '#16A34A' },
                     ] : []),
                     { label: '🔒 Locked Today',    value: locks.length,   color: '#7C3AED' },
+                    ...(pendingConflicts > 0 ? [{ label: '⚡ Sync Conflicts', value: pendingConflicts, color: '#DC2626', hl: true }] : []),
                 ].map(({ label, value, color, hl }) => (
                     <div key={label} style={{ padding: '12px 18px', borderRadius: 12, background: hl ? 'rgba(245,158,11,0.06)' : 'var(--bg-card)', border: hl ? '1.5px solid rgba(245,158,11,0.35)' : '1px solid var(--border)', minWidth: 130 }}>
                         <p style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-tertiary)', margin: '0 0 4px' }}>{label}</p>
@@ -209,6 +236,15 @@ export default function HodAttendance() {
                     color:'#7C3AED', cursor:'pointer', transition:'all 0.15s ease',
                 }}>
                     🔒 Period Locks
+                </button>
+                <button onClick={() => { setTab('conflicts'); if (!conflictsLoaded) loadConflicts(); }} style={{
+                    padding:'9px 20px', borderRadius:10, fontWeight:600, fontSize:'0.835rem',
+                    border:`1.5px solid ${tab==='conflicts'?'#DC2626':'rgba(220,38,38,0.35)'}`,
+                    background: tab==='conflicts' ? 'rgba(220,38,38,0.1)' : 'rgba(220,38,38,0.04)',
+                    color:'#DC2626', cursor:'pointer', transition:'all 0.15s ease', position:'relative',
+                }}>
+                    ⚡ Sync Conflicts
+                    {pendingConflicts > 0 && <span style={{ marginLeft:8, padding:'1px 7px', borderRadius:100, fontSize:'0.7rem', fontWeight:800, background:'rgba(220,38,38,0.18)', color:'#DC2626' }}>{pendingConflicts}</span>}
                 </button>
             </div>
 
@@ -438,6 +474,88 @@ export default function HodAttendance() {
                                 {locks.length} period{locks.length!==1?'s':''} locked · OOW = Outside period window · Unlocking deletes attendance records so faculty can re-enter
                             </p>
                         </>
+                    )}
+                </>
+            )}
+            {/* ── SYNC CONFLICTS ────────────────────────────────────────────── */}
+            {tab === 'conflicts' && (
+                <>
+                    <div style={{ padding:'14px 18px', borderRadius:12, marginBottom:18, background:'rgba(220,38,38,0.06)', border:'1.5px solid rgba(220,38,38,0.25)', display:'flex', gap:12, alignItems:'flex-start' }}>
+                        <span style={{ fontSize:'1.2rem' }}>⚡</span>
+                        <div>
+                            <p style={{ margin:0, fontWeight:700, color:'#991B1B', fontSize:'0.9rem' }}>What are sync conflicts?</p>
+                            <p style={{ margin:'4px 0 0', fontSize:'0.78rem', color:'#7F1D1D', lineHeight:1.6 }}>
+                                When a faculty marks attendance <strong>offline</strong> (no internet) and later syncs — if another faculty had already marked the <strong>same period</strong> online, this creates a conflict.
+                                You must decide which submission to keep.
+                            </p>
+                        </div>
+                    </div>
+
+                    {conflicts.length === 0 ? (
+                        <div style={{ padding:56, textAlign:'center', background:'var(--bg-card)', borderRadius:14, border:'1px solid var(--border)' }}>
+                            <p style={{ fontSize:'2rem', marginBottom:10 }}>✅</p>
+                            <p style={{ fontWeight:700, color:'var(--text-primary)', fontSize:'0.95rem', marginBottom:6 }}>No pending conflicts</p>
+                            <p style={{ fontSize:'0.82rem', color:'var(--text-secondary)' }}>When offline attendance clashes with an existing submission, it will appear here for your review.</p>
+                        </div>
+                    ) : (
+                        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+                            {conflicts.map(c => {
+                                const isRes = resolving === c.id;
+                                const bRecords = typeof c.faculty_b_records === 'string'
+                                    ? (() => { try { return JSON.parse(c.faculty_b_records); } catch { return []; } })()
+                                    : (c.faculty_b_records || []);
+                                const bPresent = bRecords.filter(r => r.status === 'present' || r.status === 'late').length;
+                                const bAbsent  = bRecords.length - bPresent;
+                                return (
+                                    <div key={c.id} style={{ borderRadius:14, border:'1.5px solid rgba(220,38,38,0.3)', background:'var(--bg-card)', overflow:'hidden', boxShadow:'var(--shadow-sm)', opacity: isRes ? 0.6 : 1 }}>
+                                        {/* Header bar */}
+                                        <div style={{ padding:'12px 20px', background:'rgba(220,38,38,0.06)', borderBottom:'1px solid rgba(220,38,38,0.2)', display:'flex', alignItems:'center', gap:14, flexWrap:'wrap' }}>
+                                            <span style={{ fontWeight:800, fontSize:'0.9rem', color:'#991B1B' }}>⚡ Conflict #{c.id}</span>
+                                            <span style={{ padding:'3px 10px', borderRadius:8, fontFamily:'monospace', fontSize:'0.78rem', fontWeight:700, background:'rgba(21,101,192,0.1)', color:'#1565C0' }}>P{c.period_number}</span>
+                                            <span style={{ fontSize:'0.82rem', color:'var(--text-secondary)', fontWeight:600 }}>{c.session_date} · Y{c.year} Sec {c.section}</span>
+                                            {c.saved_at_offline && <span style={{ fontSize:'0.72rem', color:'var(--text-tertiary)' }}>Saved offline at {new Date(c.saved_at_offline).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}</span>}
+                                        </div>
+
+                                        {/* Side-by-side comparison */}
+                                        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:0 }}>
+                                            {/* Faculty A — online submission */}
+                                            <div style={{ padding:'16px 20px', borderRight:'1px solid var(--border)' }}>
+                                                <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+                                                    <span style={{ padding:'3px 10px', borderRadius:8, fontSize:'0.7rem', fontWeight:800, background:'rgba(22,163,74,0.1)', color:'#16A34A', border:'1px solid rgba(22,163,74,0.3)' }}>ORIGINAL (Online)</span>
+                                                </div>
+                                                <p style={{ margin:0, fontWeight:800, fontSize:'0.9rem', color:'var(--text-primary)' }}>{c.faculty_a_name}</p>
+                                                <p style={{ margin:'4px 0 0', fontSize:'0.75rem', color:'var(--text-secondary)' }}>Submitted online — currently in the database</p>
+                                                <button
+                                                    onClick={() => handleResolve(c.id, 'faculty_a')}
+                                                    disabled={isRes}
+                                                    style={{ marginTop:14, width:'100%', padding:'10px', borderRadius:10, border:'none', background:isRes?'var(--border)':'linear-gradient(135deg,#16A34A,#4ADE80)', color:'white', fontWeight:700, fontSize:'0.82rem', cursor:isRes?'not-allowed':'pointer', boxShadow:'0 3px 10px rgba(22,163,74,0.3)' }}
+                                                >
+                                                    {isRes ? 'Resolving…' : '✅ Keep Original (Online)'}
+                                                </button>
+                                            </div>
+
+                                            {/* Faculty B — offline submission */}
+                                            <div style={{ padding:'16px 20px' }}>
+                                                <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+                                                    <span style={{ padding:'3px 10px', borderRadius:8, fontSize:'0.7rem', fontWeight:800, background:'rgba(245,158,11,0.1)', color:'#B45309', border:'1px solid rgba(245,158,11,0.3)' }}>OFFLINE Submission</span>
+                                                </div>
+                                                <p style={{ margin:0, fontWeight:800, fontSize:'0.9rem', color:'var(--text-primary)' }}>{c.faculty_b_name}</p>
+                                                <p style={{ margin:'4px 0 0', fontSize:'0.75rem', color:'var(--text-secondary)' }}>
+                                                    Saved offline · {bRecords.length} students ({bPresent}P / {bAbsent}A)
+                                                </p>
+                                                <button
+                                                    onClick={() => handleResolve(c.id, 'faculty_b')}
+                                                    disabled={isRes}
+                                                    style={{ marginTop:14, width:'100%', padding:'10px', borderRadius:10, border:'none', background:isRes?'var(--border)':'linear-gradient(135deg,#B45309,#F59E0B)', color:'white', fontWeight:700, fontSize:'0.82rem', cursor:isRes?'not-allowed':'pointer', boxShadow:'0 3px 10px rgba(245,158,11,0.3)' }}
+                                                >
+                                                    {isRes ? 'Resolving…' : '📵 Accept Offline Submission'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
                     )}
                 </>
             )}
