@@ -12,6 +12,87 @@ const SALT_ROUNDS = 12;
 
 router.use(auth, roleGuard('hod'));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// OFFLINE ATTENDANCE CONFLICT ROUTES
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/hod/attendance-conflicts — list unresolved conflicts for this dept
+router.get('/attendance-conflicts', async (req, res) => {
+    try {
+        const deptId = req.user.department_id;
+        const [rows] = await db.query(`
+            SELECT ac.*,
+                ua.full_name AS faculty_a_name,
+                ub.full_name AS faculty_b_name
+            FROM attendance_conflicts ac
+            JOIN users ua ON ua.id = ac.faculty_a_id
+            JOIN users ub ON ub.id = ac.faculty_b_id
+            WHERE ac.department_id = ?
+              AND ac.resolution IS NULL
+            ORDER BY ac.session_date DESC, ac.period_number ASC
+        `, [deptId]).catch(() => [[]]);
+        res.json({ conflicts: rows });
+    } catch (err) {
+        console.error('attendance-conflicts GET error:', err);
+        res.json({ conflicts: [] });
+    }
+});
+
+// POST /api/hod/attendance-conflicts/:id/resolve — HOD picks which faculty wins
+router.post('/attendance-conflicts/:id/resolve', async (req, res) => {
+    try {
+        const { resolution } = req.body; // 'faculty_a' or 'faculty_b'
+        if (!['faculty_a', 'faculty_b'].includes(resolution))
+            return res.status(400).json({ error: 'resolution must be "faculty_a" or "faculty_b"' });
+
+        const [conflicts] = await db.query(
+            'SELECT * FROM attendance_conflicts WHERE id = ? AND department_id = ?',
+            [req.params.id, req.user.department_id]
+        ).catch(() => [[]]);
+        if (conflicts.length === 0) return res.status(404).json({ error: 'Conflict not found' });
+
+        const c = conflicts[0];
+        const winnerRecords = resolution === 'faculty_b'
+            ? (typeof c.faculty_b_records === 'string' ? JSON.parse(c.faculty_b_records) : c.faculty_b_records || [])
+            : null; // faculty_a records are already in the DB as the original submission
+
+        // If faculty_b wins — overwrite attendance with their records
+        if (resolution === 'faculty_b' && winnerRecords && winnerRecords.length > 0) {
+            // Find the assignment_id via attendance_sessions
+            const [sess] = await db.query(`
+                SELECT ats.assignment_id FROM attendance_sessions ats
+                WHERE ats.department_id = ? AND ats.year = ? AND ats.section = ?
+                  AND ats.session_date = ? AND ats.period_number = ?
+                  AND ats.faculty_id = ?
+                LIMIT 1
+            `, [c.department_id, c.year, c.section, c.session_date, c.period_number, c.faculty_a_id]);
+
+            if (sess.length > 0) {
+                const assignmentId = sess[0].assignment_id;
+                for (const r of winnerRecords) {
+                    await db.query(
+                        `INSERT INTO attendance (student_id, assignment_id, date, period_number, status, marked_by)
+                         VALUES (?, ?, ?, ?, ?, ?)
+                         ON DUPLICATE KEY UPDATE status=VALUES(status), marked_by=VALUES(marked_by)`,
+                        [r.student_id, assignmentId, c.session_date, c.period_number, r.status, c.faculty_b_id]
+                    );
+                }
+            }
+        }
+
+        // Mark conflict as resolved
+        await db.query(
+            'UPDATE attendance_conflicts SET resolution = ?, resolved_by = ?, updated_at = NOW() WHERE id = ?',
+            [resolution, req.user.id, req.params.id]
+        );
+
+        res.json({ message: `Conflict resolved — ${resolution === 'faculty_a' ? 'original' : 'offline'} attendance kept` });
+    } catch (err) {
+        console.error('resolve conflict error:', err);
+        res.status(500).json({ error: 'Server error: ' + err.message });
+    }
+});
+
 // GET /api/hod/dashboard
 router.get('/dashboard', async (req, res) => {
     try {

@@ -235,6 +235,30 @@ async function ensureSessionsTable() {
     }
 }
 
+// ─── Ensure attendance_conflicts table exists ──────────────────────────────
+async function ensureConflictsTable() {
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS attendance_conflicts (
+            id              INT AUTO_INCREMENT PRIMARY KEY,
+            department_id   INT NOT NULL,
+            year            TINYINT NOT NULL,
+            section         VARCHAR(10) NOT NULL,
+            session_date    DATE NOT NULL,
+            period_number   TINYINT NOT NULL,
+            faculty_a_id    INT NOT NULL,
+            faculty_b_id    INT NOT NULL,
+            faculty_a_records JSON,
+            faculty_b_records JSON,
+            saved_at_offline  DATETIME NULL,
+            resolved_by     INT NULL,
+            resolution      ENUM('faculty_a','faculty_b') NULL,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uniq_conflict (department_id, year, section, session_date, period_number)
+        )
+    `).catch(() => {});
+}
+
 // GET /api/faculty/sessions/class-periods-status?assignment_id=&date=
 // Returns all dept periods annotated with who (if anyone) has already taken each one today
 router.get('/sessions/class-periods-status', async (req, res) => {
@@ -468,6 +492,111 @@ router.post('/sessions/:id/attendance', async (req, res) => {
     } catch (err) {
         console.error('Save session attendance error:', err);
         res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// POST /api/faculty/sessions/sync-offline — Sync an attendance entry saved while offline
+// Called by the client's syncService when internet returns.
+router.post('/sessions/sync-offline', async (req, res) => {
+    try {
+        const { assignment_id, session_date, period_number, start_time, end_time, records, saved_at } = req.body;
+        if (!assignment_id || !records || records.length === 0)
+            return res.status(400).json({ error: 'assignment_id and records required' });
+
+        // Verify faculty owns assignment
+        const [assign] = await db.query(
+            'SELECT fa.*, d.id as dept_id FROM faculty_assignments fa JOIN departments d ON d.id = fa.department_id WHERE fa.id=? AND fa.faculty_id=?',
+            [assignment_id, req.user.id]
+        );
+        if (assign.length === 0) return res.status(403).json({ error: 'Not your assignment' });
+
+        const deptId   = assign[0].department_id || assign[0].dept_id;
+        const year     = assign[0].year;
+        const section  = assign[0].section;
+        const dateStr  = session_date || todayIST();
+
+        await ensureSessionsTable();
+        await ensureConflictsTable();
+
+        // ── Cross-faculty conflict check ──────────────────────────────────────
+        if (period_number != null) {
+            const [crossCheck] = await db.query(`
+                SELECT ats.id, ats.faculty_id, u.full_name AS faculty_name
+                FROM attendance_sessions ats
+                JOIN users u ON u.id = ats.faculty_id
+                WHERE ats.department_id = ?
+                  AND ats.year          = ?
+                  AND ats.section       = ?
+                  AND ats.period_number = ?
+                  AND ats.session_date  = ?
+                  AND ats.faculty_id   != ?
+                LIMIT 1
+            `, [deptId, year, section, period_number, dateStr, req.user.id]);
+
+            if (crossCheck.length > 0) {
+                // Log conflict for HOD to resolve
+                await db.query(`
+                    INSERT INTO attendance_conflicts
+                    (department_id, year, section, session_date, period_number,
+                     faculty_a_id, faculty_b_id, faculty_a_records, faculty_b_records, saved_at_offline)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                      faculty_b_id = VALUES(faculty_b_id),
+                      faculty_b_records = VALUES(faculty_b_records),
+                      updated_at = CURRENT_TIMESTAMP
+                `, [
+                    deptId, year, section, dateStr, period_number,
+                    crossCheck[0].faculty_id, req.user.id,
+                    JSON.stringify([]),         // faculty_a already in DB
+                    JSON.stringify(records),    // faculty_b's offline submission
+                    saved_at || null,
+                ]).catch(() => {}); // non-fatal if table not ready
+
+                return res.status(409).json({
+                    error:    'Conflict — period already marked by another faculty',
+                    taken_by: crossCheck[0].faculty_name,
+                    conflict: true,
+                });
+            }
+        }
+
+        // ── Check if this faculty already submitted this period (idempotent) ──
+        const [existing] = await db.query(
+            `SELECT id FROM attendance_sessions
+             WHERE faculty_id=? AND department_id=? AND year=? AND section=? AND session_date=? AND period_number<=>?`,
+            [req.user.id, deptId, year, section, dateStr, period_number ?? null]
+        );
+
+        let sessionId;
+        if (existing.length > 0) {
+            sessionId = existing[0].id; // Already created — just upsert attendance
+        } else {
+            const [result] = await db.query(
+                `INSERT INTO attendance_sessions
+                 (assignment_id, faculty_id, department_id, year, section, session_date, period_number, start_time, end_time, outside_window, hod_confirmed)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
+                [assignment_id, req.user.id, deptId, year, section, dateStr,
+                 period_number ?? null, start_time ?? null, end_time ?? null]
+            );
+            sessionId = result.insertId;
+        }
+
+        // ── Save attendance records ───────────────────────────────────────────
+        for (const r of records) {
+            await db.query(
+                `INSERT INTO attendance (student_id, assignment_id, date, period_number, status, marked_by)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE status=VALUES(status), marked_by=VALUES(marked_by)`,
+                [r.student_id, assignment_id, dateStr, period_number ?? null, r.status, req.user.id]
+            );
+        }
+
+        res.json({ message: 'Offline attendance synced', session_id: sessionId, count: records.length });
+    } catch (err) {
+        console.error('sync-offline error:', err);
+        if (err.code === 'ER_DUP_ENTRY')
+            return res.status(409).json({ error: 'Period already taken by another faculty member' });
+        res.status(500).json({ error: 'Server error: ' + err.message });
     }
 });
 

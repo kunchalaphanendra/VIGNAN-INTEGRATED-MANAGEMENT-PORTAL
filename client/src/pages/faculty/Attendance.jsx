@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
+import useNetworkStatus from '../../hooks/useNetworkStatus';
+import { savePendingAttendance, countUnsynced, getAllOfflineEntries } from '../../utils/offlineAttendance';
+import { runSync } from '../../utils/syncService';
 import DashboardLayout from '../../components/DashboardLayout';
 import { timeToMinutes } from '../../data/timetableData';
 
@@ -293,7 +296,7 @@ function PeriodSelector({ assignment, onSelect, onBack, savedSessions, onSession
 // ═══════════════════════════════════════════════════════════════════════════
 // ATTENDANCE GRID  — shown after period is selected
 // ═══════════════════════════════════════════════════════════════════════════
-function AttendanceGrid({ assignment, period, onSave, onBack }) {
+function AttendanceGrid({ assignment, period, onSave, onBack, isOnline = true, onOfflineSave }) {
     const [students, setStudents] = useState([]);
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -325,6 +328,32 @@ function AttendanceGrid({ assignment, period, onSave, onBack }) {
 
     const handleSave = async () => {
         if (records.length === 0) return alert('No students to mark attendance for.');
+
+        // ── OFFLINE PATH ─────────────────────────────────────────────────────
+        if (!isOnline) {
+            setSaving(true);
+            try {
+                await savePendingAttendance({
+                    assignment_id: assignment.id,
+                    session_date:  todayISO(),
+                    period_number: period.period_number,
+                    start_time:    period.start_time,
+                    end_time:      period.end_time,
+                    records:       records.map(r => ({ student_id: r.student_id, roll_number: r.roll_number, full_name: r.full_name, status: r.status })),
+                    subject_name:  assignment.subject_name,
+                    year:          assignment.year,
+                    section:       assignment.section,
+                    dept_name:     assignment.dept_name,
+                });
+                onOfflineSave?.();
+                onSave(assignment.id, false, null, true); // wasOfflineSave = true
+            } catch (err) {
+                alert('Failed to save offline: ' + err.message);
+            } finally { setSaving(false); }
+            return;
+        }
+
+        // ── ONLINE PATH ──────────────────────────────────────────────────────
         setSaving(true);
         try {
             // 1. Create session with selected period's times
@@ -508,12 +537,12 @@ function AttendanceGrid({ assignment, period, onSave, onBack }) {
                     <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                         <button onClick={handleSave} disabled={saving} style={{
                             padding: '12px 32px', borderRadius: 12, border: 'none',
-                            background: saving ? 'var(--border)' : 'linear-gradient(135deg,#1565C0,#42A5F5)',
+                            background: saving ? 'var(--border)' : isOnline ? 'linear-gradient(135deg,#1565C0,#42A5F5)' : 'linear-gradient(135deg,#B45309,#F59E0B)',
                             color: 'white', fontSize: '0.9rem', fontWeight: 700,
                             cursor: saving ? 'not-allowed' : 'pointer',
                             boxShadow: saving ? 'none' : '0 4px 14px rgba(21,101,192,0.35)',
                         }}>
-                            {saving ? 'Saving…' : `Save Attendance — ${presentCount} Present · ${absentCount} Absent`}
+                            {saving ? 'Saving…' : isOnline ? `Save Attendance — ${presentCount} Present · ${absentCount} Absent` : `📵 Save Offline — ${presentCount} Present · ${absentCount} Absent`}
                         </button>
                     </div>
                 </>
@@ -669,9 +698,66 @@ function AttendanceOverview({ assignments }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// OFFLINE SYNC QUEUE — shown in Pending Sync tab
+// ═══════════════════════════════════════════════════════════════════════════
+function OfflineSyncQueue({ entries, isOnline, onManualSync, onRefresh }) {
+    const [syncing, setSyncing] = useState(false);
+    const statusColor = (e) => {
+        if (e.conflict_flagged) return '#DC2626';
+        if (e.synced)           return '#16A34A';
+        return '#B45309';
+    };
+    const statusLabel = (e) => {
+        if (e.conflict_flagged) return '⚠️ Conflict — flagged to HOD';
+        if (e.synced)           return '✅ Synced';
+        return '⏳ Pending';
+    };
+    return (
+        <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+                <div>
+                    <h2 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Offline Sync Queue</h2>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '2px 0 0' }}>
+                        Attendance saved while offline. Syncs automatically when internet returns.
+                    </p>
+                </div>
+                <button
+                    onClick={async () => { setSyncing(true); await onManualSync(); setSyncing(false); }}
+                    disabled={syncing || !isOnline}
+                    style={{ padding: '9px 20px', borderRadius: 10, border: 'none', fontWeight: 700, fontSize: '0.82rem', cursor: isOnline ? 'pointer' : 'not-allowed', background: isOnline ? 'linear-gradient(135deg,#1565C0,#42A5F5)' : 'var(--border)', color: isOnline ? 'white' : 'var(--text-tertiary)', opacity: syncing ? 0.7 : 1 }}
+                >
+                    {syncing ? '🔄 Syncing…' : isOnline ? '🔄 Sync Now' : '📵 Offline'}
+                </button>
+            </div>
+            {entries.length === 0 ? (
+                <div style={{ padding: 48, textAlign: 'center', background: 'var(--bg-card)', borderRadius: 14, border: '1px solid var(--border)' }}>
+                    <p style={{ fontSize: '1.5rem', marginBottom: 8 }}>✅</p>
+                    <p style={{ color: 'var(--text-secondary)', fontWeight: 600, fontSize: '0.9rem' }}>No offline entries</p>
+                    <p style={{ color: 'var(--text-tertiary)', fontSize: '0.8rem', marginTop: 4 }}>All attendance has been synced to the server.</p>
+                </div>
+            ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {entries.map(e => (
+                        <div key={e.local_id} style={{ padding: '14px 18px', borderRadius: 12, background: 'var(--bg-card)', border: `1.5px solid ${e.conflict_flagged ? 'rgba(220,38,38,0.35)' : e.synced ? 'rgba(22,163,74,0.3)' : 'rgba(245,158,11,0.4)'}`, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+                            <div style={{ flex: 1, minWidth: 180 }}>
+                                <p style={{ margin: 0, fontWeight: 800, fontSize: '0.9rem', color: 'var(--text-primary)' }}>{e.subject_name} · P{e.period_number}</p>
+                                <p style={{ margin: '2px 0 0', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Y{e.year}{e.section} · {e.session_date} · {e.records?.length || 0} students</p>
+                                {e.sync_error && <p style={{ margin: '3px 0 0', fontSize: '0.72rem', color: '#DC2626', fontWeight: 600 }}>{e.sync_error}</p>}
+                            </div>
+                            <span style={{ padding: '4px 12px', borderRadius: 100, fontSize: '0.72rem', fontWeight: 700, background: e.conflict_flagged ? 'rgba(220,38,38,0.1)' : e.synced ? 'rgba(22,163,74,0.1)' : 'rgba(245,158,11,0.1)', color: statusColor(e) }}>
+                                {statusLabel(e)}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MAIN PAGE
 // ═══════════════════════════════════════════════════════════════════════════
-// Flow: List → Period Selector → Attendance Grid → back to Period Selector
 const VIEW = { LIST: 'list', PERIOD: 'period', GRID: 'grid' };
 
 export default function FacultyAttendance() {
@@ -681,10 +767,13 @@ export default function FacultyAttendance() {
     const [view, setView]                       = useState(VIEW.LIST);
     const [selectedAssignment, setSelectedAssignment] = useState(null);
     const [selectedPeriod, setSelectedPeriod]   = useState(null);
-    // Map: assignmentId → [{ period_number, student_count, ... }]
     const [savedSessionsMap, setSavedSessionsMap] = useState({});
     const [toast, setToast]                     = useState(null);
     const [activeTab, setActiveTab]             = useState('mark');
+    // ── Offline / sync state ──────────────────────────────────────────────
+    const { isOnline, wasOffline } = useNetworkStatus();
+    const [pendingCount, setPendingCount]     = useState(0);
+    const [offlineEntries, setOfflineEntries] = useState([]);
 
     useEffect(() => {
         apiFetch('/api/faculty/assignments')
@@ -713,20 +802,44 @@ export default function FacultyAttendance() {
         setView(VIEW.GRID);
     }, []);
 
-    const handleSaveAttendance = useCallback(async (assignmentId, outsideWindow, windowNote) => {
+    const handleSaveAttendance = useCallback(async (assignmentId, outsideWindow, windowNote, wasOfflineSave = false) => {
         const a = assignments.find(x => x.id === assignmentId);
         const label = `${a?.subject_name || 'Subject'} · P${selectedPeriod?.period_number} · Y${a?.year} Sec ${a?.section}`;
-        if (outsideWindow && windowNote) {
+        if (wasOfflineSave) {
+            setToast({ message: `📵 Saved offline — ${label}. Will auto-sync when internet returns.`, type: 'warn' });
+            await refreshPendingCount();
+        } else if (outsideWindow && windowNote) {
             setToast({ message: `⚠ Saved (outside window) — ${label}. Pending HOD confirmation.`, type: 'warn' });
         } else {
             setToast({ message: `✅ Attendance saved — ${label}`, type: 'success' });
         }
-        // Refresh sessions so the period selector reflects the newly saved period
         await refreshSessions(assignmentId);
-        // Go BACK to period selector (not list) so faculty can pick another period
         setSelectedPeriod(null);
         setView(VIEW.PERIOD);
-    }, [assignments, selectedPeriod, refreshSessions]);
+    }, [assignments, selectedPeriod, refreshSessions, refreshPendingCount]);
+
+    // ── Refresh pending offline count ────────────────────────────────────
+    const refreshPendingCount = useCallback(async () => {
+        try { setPendingCount(await countUnsynced()); } catch { }
+    }, []);
+
+    useEffect(() => { refreshPendingCount(); }, [refreshPendingCount]);
+
+    // Auto-sync when internet returns
+    useEffect(() => {
+        if (!wasOffline) return;
+        setToast({ message: '🔄 Internet restored — syncing offline attendance…', type: 'warn' });
+        runSync(({ synced, conflicts, phase }) => {
+            if (phase !== 'done') return;
+            refreshPendingCount();
+            if (conflicts > 0)
+                setToast({ message: `✅ Synced ${synced}. ⚠️ ${conflicts} conflict(s) flagged to HOD.`, type: 'warn' });
+            else if (synced > 0)
+                setToast({ message: `✅ ${synced} offline record(s) synced successfully!`, type: 'success' });
+            else
+                setToast(null);
+        });
+    }, [wasOffline, refreshPendingCount]);
 
     // Count saved periods per assignment
     const periodsDoneFor = (assignmentId) => (savedSessionsMap[assignmentId] || []).length;
@@ -747,25 +860,40 @@ export default function FacultyAttendance() {
 
             {/* Header */}
             <div style={{ marginBottom: 24 }}>
-                <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em', margin: 0 }}>
-                    {view === VIEW.LIST   ? 'Attendance' :
-                     view === VIEW.PERIOD ? 'Select Period' :
-                                           'Mark Attendance'}
-                </h1>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+                    <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em', margin: 0 }}>
+                        {view === VIEW.LIST ? 'Attendance' : view === VIEW.PERIOD ? 'Select Period' : 'Mark Attendance'}
+                    </h1>
+                    {/* Network status dot */}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 12px', borderRadius: 100, fontSize: '0.72rem', fontWeight: 700, background: isOnline ? 'rgba(22,163,74,0.1)' : 'rgba(220,38,38,0.1)', color: isOnline ? '#16A34A' : '#DC2626', border: `1px solid ${isOnline ? 'rgba(22,163,74,0.3)' : 'rgba(220,38,38,0.3)'}` }}>
+                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: isOnline ? '#16A34A' : '#DC2626', display: 'inline-block' }} />
+                        {isOnline ? 'Online' : 'Offline'}
+                    </span>
+                </div>
                 <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 4 }}>
-                    {view === VIEW.LIST   ? "Mark today's attendance or view student overview" :
-                     view === VIEW.PERIOD ? `${selectedAssignment?.subject_name} — choose which period to mark` :
-                                           `Period ${selectedPeriod?.period_number} · ${fmtTime(selectedPeriod?.start_time)}–${fmtTime(selectedPeriod?.end_time)}`}
+                    {view === VIEW.LIST ? "Mark today's attendance or view student overview" : view === VIEW.PERIOD ? `${selectedAssignment?.subject_name} — choose which period to mark` : `Period ${selectedPeriod?.period_number} · ${fmtTime(selectedPeriod?.start_time)}–${fmtTime(selectedPeriod?.end_time)}`}
                 </p>
-                {view === VIEW.LIST && (
-                    <div style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '5px 14px', borderRadius: 10, background: 'rgba(21,101,192,0.07)', border: '1px solid rgba(21,101,192,0.2)' }}>
-                        <span style={{ fontSize: '0.82rem' }}>📅</span>
-                        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#1565C0' }}>
-                            {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+                    {view === VIEW.LIST && (
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '5px 14px', borderRadius: 10, background: 'rgba(21,101,192,0.07)', border: '1px solid rgba(21,101,192,0.2)' }}>
+                            <span style={{ fontSize: '0.82rem' }}>📅</span>
+                            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#1565C0' }}>
+                                {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
+                            </span>
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>· Periods reset daily at midnight</span>
+                        </div>
+                    )}
+                    {!isOnline && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 10, fontSize: '0.75rem', fontWeight: 700, background: 'rgba(220,38,38,0.08)', color: '#DC2626', border: '1px solid rgba(220,38,38,0.25)' }}>
+                            📵 No internet — attendance will be saved locally
                         </span>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-tertiary)' }}>· Periods reset daily at midnight</span>
-                    </div>
-                )}
+                    )}
+                    {pendingCount > 0 && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 12px', borderRadius: 10, fontSize: '0.75rem', fontWeight: 700, background: 'rgba(245,158,11,0.1)', color: '#B45309', border: '1px solid rgba(245,158,11,0.35)' }}>
+                            ⏳ {pendingCount} entry{pendingCount > 1 ? 's' : ''} pending sync
+                        </span>
+                    )}
+                </div>
             </div>
 
 
@@ -787,6 +915,8 @@ export default function FacultyAttendance() {
                     period={selectedPeriod}
                     onSave={handleSaveAttendance}
                     onBack={() => setView(VIEW.PERIOD)}
+                    isOnline={isOnline}
+                    onOfflineSave={refreshPendingCount}
                 />
             )}
 
@@ -809,12 +939,32 @@ export default function FacultyAttendance() {
                     </div>
 
                     {/* Tabs */}
-                    <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
                         <button style={tabStyle('mark')}     onClick={() => setActiveTab('mark')}>📋 Mark Attendance</button>
                         <button style={tabStyle('overview')} onClick={() => setActiveTab('overview')}>📊 Student Overview</button>
+                        <button
+                            style={{ ...tabStyle('pending'), ...(pendingCount > 0 ? { borderColor: '#B45309', color: activeTab === 'pending' ? 'white' : '#B45309', background: activeTab === 'pending' ? '#B45309' : 'var(--bg-card)' } : {}) }}
+                            onClick={async () => { const e = await getAllOfflineEntries(); setOfflineEntries(e); await refreshPendingCount(); setActiveTab('pending'); }}
+                        >
+                            ⏳ Sync Queue{pendingCount > 0 ? ` (${pendingCount})` : ''}
+                        </button>
                     </div>
 
-                    {activeTab === 'mark' ? (
+                    {activeTab === 'pending' ? (
+                        <OfflineSyncQueue
+                            entries={offlineEntries}
+                            isOnline={isOnline}
+                            onRefresh={async () => { const e = await getAllOfflineEntries(); setOfflineEntries(e); await refreshPendingCount(); }}
+                            onManualSync={async () => {
+                                if (!isOnline) { setToast({ message: '📵 Still offline — sync will happen automatically when internet returns.', type: 'warn' }); return; }
+                                setToast({ message: '🔄 Syncing…', type: 'warn' });
+                                const result = await runSync(async () => { const e = await getAllOfflineEntries(); setOfflineEntries(e); await refreshPendingCount(); });
+                                const e = await getAllOfflineEntries(); setOfflineEntries(e); await refreshPendingCount();
+                                if (result.conflicts > 0) setToast({ message: `✅ Synced ${result.synced}. ⚠️ ${result.conflicts} conflict(s) flagged to HOD.`, type: 'warn' });
+                                else setToast({ message: `✅ ${result.synced} record(s) synced!`, type: 'success' });
+                            }}
+                        />
+                    ) : activeTab === 'mark' ? (
                         loading ? (
                             <div style={{ padding: 48, textAlign: 'center', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 14 }}>
                                 <p style={{ color: 'var(--text-secondary)' }}>Loading your assignments…</p>
