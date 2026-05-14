@@ -65,6 +65,27 @@ function PeriodSelector({ assignment, onSelect, onBack, savedSessions, onSession
     const curMins = timeToMinutes(currentTime);
 
     useEffect(() => {
+        const CACHE_KEY = 'vimp_periods_cache';
+        const isOnline  = navigator.onLine;
+
+        // Try to load from cache immediately so UI shows something even if offline
+        let cachedPeriods = [];
+        try {
+            const raw = localStorage.getItem(CACHE_KEY);
+            if (raw) cachedPeriods = JSON.parse(raw);
+        } catch { /* ignore */ }
+
+        if (!isOnline) {
+            // ── OFFLINE: use cached periods, skip lock-status check ──────────
+            if (cachedPeriods.length > 0) {
+                // Strip any lock info — when offline we allow all periods
+                setPeriods(cachedPeriods.map(p => ({ ...p, locked_by_me: false, locked_by_other: false, locked_by_name: null })));
+            }
+            setLoading(false);
+            return;
+        }
+
+        // ── ONLINE: fetch fresh + update cache ───────────────────────────────
         const statusUrl = `/api/faculty/sessions/class-periods-status?assignment_id=${assignment.id}&date=${todayISO()}`;
         Promise.all([
             apiFetch('/api/faculty/active-periods'),
@@ -73,6 +94,8 @@ function PeriodSelector({ assignment, onSelect, onBack, savedSessions, onSession
             .then(([activePeriods, statusData]) => {
                 const activePeriodsList = activePeriods.periods || [];
                 const statusPeriods = statusData.periods || [];
+                // Save fresh periods to cache for offline use
+                try { localStorage.setItem(CACHE_KEY, JSON.stringify(activePeriodsList)); } catch { /* ignore */ }
                 // Build lock-status map by period_number
                 const lockMap = {};
                 statusPeriods.forEach(sp => { lockMap[sp.period_number] = sp; });
@@ -85,9 +108,15 @@ function PeriodSelector({ assignment, onSelect, onBack, savedSessions, onSession
                 }));
                 setPeriods(merged);
             })
-            .catch(() => setPeriods([]))
+            .catch(() => {
+                // Network failed even though navigator.onLine said true — use cache
+                if (cachedPeriods.length > 0) {
+                    setPeriods(cachedPeriods.map(p => ({ ...p, locked_by_me: false, locked_by_other: false, locked_by_name: null })));
+                }
+            })
             .finally(() => setLoading(false));
     }, [assignment.id]);
+
 
     const toMins = (t) => {
         if (!t) return 0;
@@ -776,11 +805,32 @@ export default function FacultyAttendance() {
     const [offlineEntries, setOfflineEntries] = useState([]);
 
     useEffect(() => {
+        const CACHE_KEY = 'vimp_assignments_cache';
+        // Show cached assignments immediately while fetching
+        try {
+            const raw = localStorage.getItem(CACHE_KEY);
+            if (raw) {
+                const cached = JSON.parse(raw);
+                if (cached.length > 0) setAssignments(cached);
+            }
+        } catch { /* ignore */ }
+
+        if (!navigator.onLine) {
+            // Offline from the start — use cache
+            setLoading(false);
+            return;
+        }
+
         apiFetch('/api/faculty/assignments')
-            .then(d => setAssignments(d.assignments || []))
+            .then(d => {
+                const list = d.assignments || [];
+                try { localStorage.setItem(CACHE_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+                setAssignments(list);
+            })
             .catch(err => setError('Failed to load: ' + err.message))
             .finally(() => setLoading(false));
     }, []);
+
 
     // Load (or refresh) today's sessions for a given assignment
     const refreshSessions = useCallback(async (assignmentId) => {
