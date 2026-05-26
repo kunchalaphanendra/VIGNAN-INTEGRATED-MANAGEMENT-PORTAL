@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import api from '../utils/api';
+import { useNotifications } from '../context/NotificationContext';
 import { HiOutlineBell, HiOutlineSun, HiOutlineMoon, HiOutlineLogout, HiOutlineMenu, HiOutlineChevronRight } from 'react-icons/hi';
 
 const roleColors = {
@@ -52,18 +52,17 @@ export default function Navbar({ onMenuClick }) {
     const { user, logout } = useAuth();
     const { theme, toggleTheme } = useTheme();
     const navigate = useNavigate();
-    const [notifCount, setNotifCount] = useState(0);
+    const {
+        notifications,
+        unreadCount,
+        markAsRead,
+        markAllAsRead
+    } = useNotifications();
     const [showNotifs, setShowNotifs] = useState(false);
-    const [notifications, setNotifications] = useState([]);
     const notifRef = useRef(null);
 
-    useEffect(() => {
-        if (user) {
-            fetchNotifications();
-            const interval = setInterval(fetchNotifications, 30000);
-            return () => clearInterval(interval);
-        }
-    }, [user]);
+    const notifCount = unreadCount;
+    const visibleNotifications = (notifications || []).slice(0, 10);
 
     useEffect(() => {
         const handleClick = (e) => {
@@ -73,32 +72,16 @@ export default function Navbar({ onMenuClick }) {
         return () => document.removeEventListener('mousedown', handleClick);
     }, []);
 
-    const fetchNotifications = async () => {
-        try {
-            const res = await api.get('/notifications');
-            setNotifCount(res.data.unread_count);
-            setNotifications(res.data.notifications.slice(0, 10));
-        } catch { }
-    };
-
     const markAllRead = async () => {
-        try {
-            await api.patch('/notifications/read-all');
-            setNotifCount(0);
-            setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
-        } catch { }
+        await markAllAsRead();
     };
 
-    // Click a notification → mark it read + navigate to the right page
     const handleNotifClick = async (notif) => {
         setShowNotifs(false);
-        // Optimistic update
         if (!notif.is_read) {
-            setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, is_read: true } : n));
-            setNotifCount(prev => Math.max(0, prev - 1));
-            api.patch(`/notifications/${notif.id}/read`).catch(() => {});
+            await markAsRead(notif.id);
         }
-        navigate(getNotificationLink(notif.type, user.role));
+        navigate(notif.target_url || getNotificationLink(notif.type, user.role));
     };
 
     const handleLogout = async () => {
@@ -137,7 +120,7 @@ export default function Navbar({ onMenuClick }) {
                 </button>
                 <Link to={`/${user.role}/dashboard`} style={{
                     display: 'flex', alignItems: 'center', gap: 10,
-                    textDecoration: 'none',
+                    textDecoration: 'none', minWidth: 0,
                 }}>
                     <div style={{
                         width: 36, height: 36, borderRadius: 10,
@@ -145,10 +128,13 @@ export default function Navbar({ onMenuClick }) {
                         color: 'white', fontWeight: 800, fontSize: 15,
                         background: `linear-gradient(135deg, #1A3C6E, #2A5298)`,
                         boxShadow: '0 2px 8px rgba(26,60,110,0.25)',
+                        flexShrink: 0,
                     }}>V</div>
-                    <span style={{
+                    <span className="nav-brand-text" style={{
                         fontWeight: 700, fontSize: 17, letterSpacing: '-0.02em',
                         color: 'var(--text-primary)',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        maxWidth: 'calc(100vw - 220px)',
                     }}>Vignan Portal</span>
                 </Link>
             </div>
@@ -214,12 +200,12 @@ export default function Navbar({ onMenuClick }) {
 
                             {/* List */}
                             <div style={{ maxHeight: 380, overflowY: 'auto' }}>
-                                {notifications.length === 0 ? (
+                                {visibleNotifications.length === 0 ? (
                                     <div style={{ padding: '32px 16px', textAlign: 'center' }}>
                                         <HiOutlineBell size={28} style={{ color: 'var(--text-tertiary)', margin: '0 auto 8px' }} />
                                         <p style={{ fontSize: '0.825rem', color: 'var(--text-secondary)' }}>No new notifications</p>
                                     </div>
-                                ) : notifications.map(n => (
+                                ) : visibleNotifications.map(n => (
                                     <div key={n.id}
                                         onClick={() => handleNotifClick(n)}
                                         style={{
@@ -261,9 +247,9 @@ export default function Navbar({ onMenuClick }) {
 
                             {/* Footer link */}
                             <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)', textAlign: 'center' }}>
-                                <button onClick={() => { setShowNotifs(false); navigate(`/${user.role}/notices`); }}
+                                <button onClick={() => { setShowNotifs(false); navigate(`/${user.role}/notifications`); }}
                                     style={{ fontSize: '0.78rem', fontWeight: 600, color: roleColor, background: 'none', border: 'none', cursor: 'pointer' }}>
-                                    View all notices →
+                                    View all notifications →
                                 </button>
                             </div>
                         </div>

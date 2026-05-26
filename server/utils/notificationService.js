@@ -1,85 +1,159 @@
-/**
- * Notification Service
- * Centralized utility to insert notifications into the DB for any action.
- * Usage: const { sendNotification, notifyDepartment } = require('./notificationService');
- */
 const db = require('../db/connection');
 
 /**
- * Send a notification to multiple users.
- * @param {number[]} userIds - Array of user IDs to notify
- * @param {string} title     - Notification title
- * @param {string} message   - Notification body
- * @param {string} type      - One of: notice|leave|marks|complaint|alert|poll|calendar|attendance
- * @param {number|null} referenceId - Optional: ID of the related record
+ * Send a notification.
+ * Handles database fan-out and Socket.IO real-time broadcasting.
+ * 
+ * Supports options:
+ * - title, message, type (required)
+ * - sender_role, sender_id (optional)
+ * - recipient_id (optional, single user)
+ * - recipient_role (optional, broadcast to role)
+ * - department_id (optional, broadcast to department)
+ * - target_url (optional, redirect link)
  */
-async function sendNotification({ userIds, title, message, type, referenceId = null }) {
-    if (!userIds || userIds.length === 0) return;
+async function sendNotification({
+    title,
+    message,
+    type = 'info',
+    sender_role = null,
+    sender_id = null,
+    recipient_id = null,
+    recipient_role = null,
+    department_id = null,
+    target_url = null
+}) {
+    let recipientIds = [];
+
+    // 1. Resolve recipients
+    if (recipient_id) {
+        recipientIds.push(recipient_id);
+    } else if (recipient_role && department_id) {
+        // Broadcast to specific department and role
+        const [rows] = await db.query(
+            "SELECT id FROM users WHERE role = ? AND department_id = ? AND is_active = TRUE",
+            [recipient_role, department_id]
+        );
+        recipientIds = rows.map(r => r.id);
+    } else if (recipient_role) {
+        // Broadcast to role institution-wide
+        const [rows] = await db.query(
+            "SELECT id FROM users WHERE role = ? AND is_active = TRUE",
+            [recipient_role]
+        );
+        recipientIds = rows.map(r => r.id);
+    } else if (department_id) {
+        // Broadcast to entire department (all roles)
+        const [rows] = await db.query(
+            "SELECT id FROM users WHERE department_id = ? AND is_active = TRUE",
+            [department_id]
+        );
+        recipientIds = rows.map(r => r.id);
+    } else {
+        // Global broadcast (all users)
+        const [rows] = await db.query(
+            "SELECT id FROM users WHERE is_active = TRUE"
+        );
+        recipientIds = rows.map(r => r.id);
+    }
+
+    if (recipientIds.length === 0) return;
 
     // Remove duplicates
-    const unique = [...new Set(userIds)];
+    const uniqueRecipients = [...new Set(recipientIds)];
 
-    const values = unique.map(uid => [uid, title, message, type, referenceId]);
-    await db.query(
-        'INSERT INTO notifications (user_id, title, message, type, reference_id) VALUES ?',
+    // 2. Insert into Database using bulk insert
+    const values = uniqueRecipients.map(uid => [
+        uid, title, message, type, sender_role, sender_id, recipient_role, department_id, target_url
+    ]);
+
+    const [insertResult] = await db.query(
+        `INSERT INTO notifications 
+         (recipient_id, title, message, type, sender_role, sender_id, recipient_role, department_id, target_url) 
+         VALUES ?`,
         [values]
     );
+
+    // 3. Emit real-time notification via Socket.IO
+    if (global.io && insertResult.insertId) {
+        const startId = insertResult.insertId;
+        const [insertedRows] = await db.query(
+            "SELECT * FROM notifications WHERE id >= ? ORDER BY id ASC",
+            [startId]
+        );
+
+        // Emit to each individual recipient's room
+        insertedRows.forEach(row => {
+            global.io.to(`user_${row.recipient_id}`).emit('new_notification', row);
+        });
+    }
 }
 
 /**
- * Notify all active students in a department (optionally filtered by year/section).
+ * Backward compatibility helpers (mapping old functions to the new signature)
  */
-async function notifyStudentsInDept({ deptId, year = null, section = null, title, message, type, referenceId = null }) {
-    let sql = `
-        SELECT u.id FROM users u
-        JOIN student_profiles sp ON sp.user_id = u.id
-        WHERE sp.department_id = ? AND u.role = 'student' AND u.is_active = TRUE
-    `;
-    const params = [deptId];
-    if (year) { sql += ' AND sp.year = ?'; params.push(year); }
-    if (section) { sql += ' AND sp.section = ?'; params.push(section); }
-
-    const [rows] = await db.query(sql, params);
-    const userIds = rows.map(r => r.id);
-    await sendNotification({ userIds, title, message, type, referenceId });
+async function notifyAll({ role = null, title, message, type, target_url = null }) {
+    await sendNotification({
+        title, message, type,
+        recipient_role: role,
+        target_url
+    });
 }
 
-/**
- * Notify all active faculty in a department.
- */
-async function notifyFacultyInDept({ deptId, title, message, type, referenceId = null }) {
-    const [rows] = await db.query(
-        "SELECT id FROM users WHERE department_id = ? AND role = 'faculty' AND is_active = TRUE",
-        [deptId]
-    );
-    const userIds = rows.map(r => r.id);
-    await sendNotification({ userIds, title, message, type, referenceId });
+async function notifyStudentsInDept({ deptId, year = null, section = null, title, message, type, target_url = null }) {
+    if (year || section) {
+        let sql = `
+            SELECT u.id FROM users u
+            JOIN student_profiles sp ON sp.user_id = u.id
+            WHERE sp.department_id = ? AND u.role = 'student' AND u.is_active = TRUE
+        `;
+        const params = [deptId];
+        if (year) { sql += ' AND sp.year = ?'; params.push(year); }
+        if (section) { sql += ' AND sp.section = ?'; params.push(section); }
+        
+        const [rows] = await db.query(sql, params);
+        for (const r of rows) {
+            await sendNotification({
+                title, message, type,
+                recipient_id: r.id,
+                target_url
+            });
+        }
+    } else {
+        await sendNotification({
+            title, message, type,
+            recipient_role: 'student',
+            department_id: deptId,
+            target_url
+        });
+    }
 }
 
-/**
- * Notify all active students in a specific class (year + section + dept from an assignment).
- */
-async function notifyClassStudents({ assignmentId, title, message, type, referenceId = null }) {
+async function notifyFacultyInDept({ deptId, title, message, type, target_url = null }) {
+    await sendNotification({
+        title, message, type,
+        recipient_role: 'faculty',
+        department_id: deptId,
+        target_url
+    });
+}
+
+async function notifyClassStudents({ assignmentId, title, message, type, target_url = null }) {
     const [assign] = await db.query(
         'SELECT department_id, year, section FROM faculty_assignments WHERE id = ?',
         [assignmentId]
     );
     if (!assign.length) return;
     const { department_id, year, section } = assign[0];
-    await notifyStudentsInDept({ deptId: department_id, year, section, title, message, type, referenceId });
-}
-
-/**
- * Notify all users institution-wide (all roles or filtered by role).
- */
-async function notifyAll({ role = null, title, message, type, referenceId = null }) {
-    let sql = 'SELECT id FROM users WHERE is_active = TRUE';
-    const params = [];
-    if (role) { sql += ' AND role = ?'; params.push(role); }
-
-    const [rows] = await db.query(sql, params);
-    const userIds = rows.map(r => r.id);
-    await sendNotification({ userIds, title, message, type, referenceId });
+    await notifyStudentsInDept({
+        deptId: department_id,
+        year,
+        section,
+        title,
+        message,
+        type,
+        target_url
+    });
 }
 
 module.exports = {

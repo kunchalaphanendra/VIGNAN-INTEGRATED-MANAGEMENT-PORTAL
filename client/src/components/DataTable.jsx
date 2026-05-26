@@ -34,16 +34,16 @@ export default function DataTable({ columns, data, searchable = true, emptyText 
     };
 
     return (
-        <div style={{
+        <div className="card-table-wrap" style={{
             borderRadius: 16, overflow: 'hidden',
             background: 'var(--bg-card)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
         }}>
 
             {/* Header bar with search and optional title/actions */}
             {(searchable || title || actions) && (
-                <div style={{
+                <div className="dt-header-bar" style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    flexWrap: 'wrap', gap: 12, padding: '14px 20px',
+                    flexWrap: 'wrap', gap: 10, padding: '12px 16px',
                     borderBottom: '1px solid var(--border)',
                 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -55,16 +55,16 @@ export default function DataTable({ columns, data, searchable = true, emptyText 
                             }}>{filtered.length} {filtered.length === 1 ? 'item' : 'items'}</span>
                         )}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, justifyContent: 'flex-end' }}>
                         {searchable && (
-                            <div style={{ position: 'relative', width: '100%', maxWidth: 240 }}>
+                            <div className="dt-search-wrap" style={{ position: 'relative', width: '100%', maxWidth: 240 }}>
                                 <HiOutlineSearch size={15} style={{
                                     position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
                                     color: 'var(--text-tertiary)',
                                 }} />
                                 <input type="text" value={search} onChange={e => setSearch(e.target.value)}
                                     placeholder="Search..." className="form-input"
-                                    style={{ height: 36, paddingLeft: 34, fontSize: '0.835rem' }} />
+                                    style={{ height: 36, paddingLeft: 34, fontSize: '0.835rem', width: '100%' }} />
                             </div>
                         )}
                         {actions}
@@ -96,7 +96,7 @@ export default function DataTable({ columns, data, searchable = true, emptyText 
                     <tbody>
                         {sorted.length === 0 ? (
                             <tr>
-                                <td colSpan={columns.length}>
+                                <td colSpan={columns.length} data-label="">
                                     <div className="empty-state" style={{ padding: '40px 20px' }}>
                                         <div className="empty-state-icon">
                                             <HiOutlineInbox size={24} />
@@ -108,7 +108,7 @@ export default function DataTable({ columns, data, searchable = true, emptyText 
                         ) : sorted.map((row, i) => (
                             <tr key={row.id || i}>
                                 {columns.map(col => (
-                                    <td key={col.key}>
+                                    <td key={col.key} data-label={col.header || ''}>
                                         {col.render ? col.render(row) : (typeof col.accessor === 'function' ? col.accessor(row) : row[col.accessor])}
                                     </td>
                                 ))}

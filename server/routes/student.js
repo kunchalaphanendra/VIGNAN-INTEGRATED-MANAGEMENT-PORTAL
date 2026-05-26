@@ -5,6 +5,72 @@ const auth = require('../middleware/auth');
 const roleGuard = require('../middleware/roleGuard');
 const upload = require('../middleware/upload');
 
+const formatDate = d => {
+    if (!d) return '';
+    const dateObj = new Date(d);
+    return isNaN(dateObj.getTime()) ? String(d) : dateObj.toISOString().split('T')[0];
+};
+
+function groupStudentLeaves(rows) {
+    const groups = [];
+    for (const r of rows) {
+        const rTime = new Date(r.created_at).getTime();
+        const existingGroup = groups.find(g => 
+            g.leave_type === r.leave_type &&
+            formatDate(g.from_date) === formatDate(r.from_date) &&
+            formatDate(g.to_date) === formatDate(r.to_date) &&
+            g.reason === r.reason &&
+            Math.abs(new Date(g.created_at).getTime() - rTime) < 5000
+        );
+
+        if (!existingGroup) {
+            groups.push({
+                ...r,
+                faculty_names: r.faculty_name ? [r.faculty_name] : [],
+                statuses: [r.status],
+                remarks_list: r.remarks ? [r.remarks] : []
+            });
+        } else {
+            if (r.faculty_name) existingGroup.faculty_names.push(r.faculty_name);
+            existingGroup.statuses.push(r.status);
+            if (r.remarks) existingGroup.remarks_list.push(r.remarks);
+        }
+    }
+
+    const result = groups.map(g => {
+        let overallStatus = 'pending';
+        if (g.statuses.every(s => s === 'approved')) {
+            overallStatus = 'approved';
+        } else if (g.statuses.some(s => s === 'rejected')) {
+            overallStatus = 'rejected';
+        }
+
+        const facultyNameCombined = g.faculty_names.length > 0 
+            ? [...new Set(g.faculty_names)].join(', ') 
+            : null;
+
+        const remarksCombined = g.remarks_list.length > 0 
+            ? [...new Set(g.remarks_list)].join('; ') 
+            : null;
+
+        const resObj = {
+            ...g,
+            status: overallStatus,
+            remarks: remarksCombined
+        };
+        if (facultyNameCombined) {
+            resObj.faculty_name = facultyNameCombined;
+        }
+        delete resObj.faculty_names;
+        delete resObj.statuses;
+        delete resObj.remarks_list;
+        return resObj;
+    });
+
+    result.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    return result;
+}
+
 router.use(auth, roleGuard('student'));
 
 // GET /api/student/dashboard
@@ -80,9 +146,10 @@ router.get('/dashboard', async (req, res) => {
     `, [req.user.id]);
 
         // Leave status
-        const [leaves] = await db.query(
-            'SELECT * FROM student_leaves WHERE student_id=? ORDER BY created_at DESC LIMIT 3', [req.user.id]
+        const [leaveRows] = await db.query(
+            'SELECT * FROM student_leaves WHERE student_id=? ORDER BY created_at DESC LIMIT 15', [req.user.id]
         );
+        const leaves = groupStudentLeaves(leaveRows).slice(0, 3);
 
         // Upcoming events
         const [events] = await db.query(`
@@ -482,6 +549,44 @@ router.post('/projects', upload.single('attachment'), async (req, res) => {
             'INSERT INTO student_projects (student_id, title, description, type, platform, completed_date, attachment_url, project_link) VALUES (?,?,?,?,?,?,?,?)',
             [req.user.id, title, description, type, platform, completed_date || null, attachmentUrl, project_link || null]
         );
+
+        // Notify Class Teacher or Faculty in department
+        try {
+            const [studentProf] = await db.query('SELECT department_id, year, section FROM student_profiles WHERE user_id = ?', [req.user.id]);
+            if (studentProf.length > 0) {
+                const { department_id, year, section } = studentProf[0];
+                const [ct] = await db.query(
+                    'SELECT faculty_id FROM faculty_assignments WHERE department_id = ? AND year = ? AND section = ? AND is_class_teacher = TRUE',
+                    [department_id, year, section]
+                );
+                const { sendNotification } = require('../utils/notificationService');
+                if (ct.length > 0) {
+                    await sendNotification({
+                        recipient_id: ct[0].faculty_id,
+                        title: 'New Project Submitted',
+                        message: `${req.user.full_name} has submitted a project: "${title}"`,
+                        type: 'academic',
+                        sender_role: req.user.role,
+                        sender_id: req.user.id,
+                        target_url: `/faculty/projects`
+                    });
+                } else {
+                    await sendNotification({
+                        recipient_role: 'faculty',
+                        department_id: department_id,
+                        title: 'New Project Submitted',
+                        message: `${req.user.full_name} has submitted a project: "${title}"`,
+                        type: 'academic',
+                        sender_role: req.user.role,
+                        sender_id: req.user.id,
+                        target_url: `/faculty/projects`
+                    });
+                }
+            }
+        } catch (e) {
+            console.error('Notify project submission error:', e);
+        }
+
         res.status(201).json({ message: 'Project submitted', id: result.insertId });
     } catch (err) {
         console.error('Submit project error:', err);
@@ -609,29 +714,38 @@ router.get('/timetable', async (req, res) => {
                 return res.status(400).json({ error: 'All fields required' });
             }
 
-            // Find class teacher
-            const [ct] = await db.query(`
+            // Find class teachers
+            const [ctList] = await db.query(`
       SELECT fa.faculty_id FROM faculty_assignments fa
       JOIN student_profiles sp ON sp.department_id = fa.department_id AND sp.year = fa.year AND sp.section = fa.section
       WHERE sp.user_id = ? AND fa.is_class_teacher = TRUE
-      LIMIT 1
     `, [req.user.id]);
-            if (ct.length === 0) return res.status(400).json({ error: 'No class teacher assigned' });
+            if (ctList.length === 0) return res.status(400).json({ error: 'No class teacher assigned' });
 
             const attachmentUrl = req.file ? `/uploads/${req.user.role}/${req.user.id}/${req.file.filename}` : null;
+            const insertIds = [];
 
-            const [result] = await db.query(
-                'INSERT INTO student_leaves (student_id, faculty_id, leave_type, from_date, to_date, reason, attachment_url) VALUES (?,?,?,?,?,?,?)',
-                [req.user.id, ct[0].faculty_id, leave_type, from_date, to_date, reason, attachmentUrl]
-            );
+            for (const ct of ctList) {
+                const [result] = await db.query(
+                    'INSERT INTO student_leaves (student_id, faculty_id, leave_type, from_date, to_date, reason, attachment_url) VALUES (?,?,?,?,?,?,?)',
+                    [req.user.id, ct.faculty_id, leave_type, from_date, to_date, reason, attachmentUrl]
+                );
+                insertIds.push(result.insertId);
 
-            // Notify class teacher
-            await db.query(
-                'INSERT INTO notifications (user_id, title, message, type, reference_id) VALUES (?,?,?,?,?)',
-                [ct[0].faculty_id, 'New Leave Request', `${req.user.full_name} has requested leave from ${from_date} to ${to_date}`, 'leave', result.insertId]
-            );
+                // Notify class teacher
+                const { sendNotification } = require('../utils/notificationService');
+                await sendNotification({
+                    recipient_id: ct.faculty_id,
+                    title: 'New Leave Request',
+                    message: `${req.user.full_name} has requested leave from ${from_date} to ${to_date}`,
+                    type: 'leave',
+                    sender_role: req.user.role,
+                    sender_id: req.user.id,
+                    target_url: `/faculty/student-leaves`
+                });
+            }
 
-            res.status(201).json({ message: 'Leave request submitted', id: result.insertId });
+            res.status(201).json({ message: 'Leave request submitted', ids: insertIds });
         } catch (err) {
             res.status(500).json({ error: 'Server error' });
         }
@@ -647,7 +761,7 @@ router.get('/timetable', async (req, res) => {
       WHERE sl.student_id = ?
       ORDER BY sl.created_at DESC
     `, [req.user.id]);
-            res.json({ leaves: rows });
+            res.json({ leaves: groupStudentLeaves(rows) });
         } catch (err) {
             res.status(500).json({ error: 'Server error' });
         }
@@ -776,6 +890,39 @@ router.get('/timetable', async (req, res) => {
                 'INSERT INTO complaints (complaint_ref, title, student_id, is_anonymous, window_id, message, attachment_url, portal_type) VALUES (?,?,?,?,?,?,?,?)',
                 [ref, title || 'General Complaint', anonymous ? null : req.user.id, anonymous ? 1 : 0, window[0].id, message, attachmentUrl, targetPortal]
             );
+
+            // Notify Principal or HOD
+            try {
+                const { sendNotification } = require('../utils/notificationService');
+                if (targetPortal === 'principal') {
+                    await sendNotification({
+                        recipient_role: 'principal',
+                        title: 'New Complaint Received',
+                        message: anonymous ? 'An anonymous student has submitted a new complaint.' : `${req.user.full_name} has submitted a new complaint.`,
+                        type: 'complaint',
+                        sender_role: req.user.role,
+                        sender_id: req.user.id,
+                        target_url: `/principal/complaints`
+                    });
+                } else if (targetPortal === 'hod') {
+                    const [prof] = await db.query('SELECT department_id FROM student_profiles WHERE user_id = ?', [req.user.id]);
+                    const deptId = prof[0]?.department_id;
+                    if (deptId) {
+                        await sendNotification({
+                            recipient_role: 'hod',
+                            department_id: deptId,
+                            title: 'New Complaint Received',
+                            message: anonymous ? 'An anonymous student has submitted a new complaint.' : `${req.user.full_name} has submitted a new complaint.`,
+                            type: 'complaint',
+                            sender_role: req.user.role,
+                            sender_id: req.user.id,
+                            target_url: `/hod/complaints`
+                        });
+                    }
+                }
+            } catch (notifErr) {
+                console.error('Complaint notification trigger failed:', notifErr);
+            }
 
             res.status(201).json({ message: 'Complaint submitted', complaint_ref: ref, portal_type: targetPortal });
         } catch (err) {

@@ -4,11 +4,12 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../db/connection');
 const auth = require('../middleware/auth');
+const { checkLockout, recordAttempt } = require('../middleware/lockout');
 
 const SALT_ROUNDS = 12;
 
 // POST /api/auth/login
-router.post('/login', async (req, res) => {
+router.post('/login', checkLockout, async (req, res) => {
     try {
         const { login_id, password, role } = req.body;
         if (!login_id || !password || !role) {
@@ -16,19 +17,27 @@ router.post('/login', async (req, res) => {
         }
 
         const [rows] = await db.query(
-            'SELECT * FROM users WHERE login_id = ? AND role = ? AND is_active = TRUE',
+            `SELECT u.*, d.name as department_name, d.code as department_code 
+             FROM users u 
+             LEFT JOIN departments d ON u.department_id = d.id 
+             WHERE u.login_id = ? AND u.role = ? AND u.is_active = TRUE`,
             [login_id, role]
         );
 
         if (rows.length === 0) {
+            await recordAttempt(login_id, req.ip, true);
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         const user = rows[0];
         const match = await bcrypt.compare(password, user.password_hash);
         if (!match) {
+            await recordAttempt(login_id, req.ip, true);
             return res.status(401).json({ error: 'Invalid credentials' });
         }
+
+        // Record successful login (clears old failures)
+        await recordAttempt(login_id, req.ip, false);
 
         const tokenPayload = {
             id: user.id,
@@ -60,6 +69,8 @@ router.post('/login', async (req, res) => {
                 email: user.email,
                 phone: user.phone,
                 department_id: user.department_id,
+                department_name: user.department_name,
+                department_code: user.department_code,
                 profile_photo: user.profile_photo,
                 theme_preference: user.theme_preference
             }
@@ -80,7 +91,11 @@ router.post('/logout', (req, res) => {
 router.get('/me', auth, async (req, res) => {
     try {
         const [rows] = await db.query(
-            'SELECT id, login_id, role, department_id, full_name, email, phone, profile_photo, theme_preference FROM users WHERE id = ?',
+            `SELECT u.id, u.login_id, u.role, u.department_id, u.full_name, u.email, u.phone, u.profile_photo, u.theme_preference,
+                    d.name as department_name, d.code as department_code 
+             FROM users u 
+             LEFT JOIN departments d ON u.department_id = d.id 
+             WHERE u.id = ?`,
             [req.user.id]
         );
         if (rows.length === 0) {

@@ -45,17 +45,19 @@ export default function PrincipalDashboard() {
 
     return (
         <DashboardLayout>
-            {/* Greeting */}
-            <div style={{ marginBottom: 28 }}>
-                <p style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-tertiary)', marginBottom: 4 }}>
-                    {greeting} 👋
-                </p>
-                <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em', margin: 0 }}>
-                    {user?.full_name || 'Principal'}
-                </h1>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 4 }}>
-                    Institution-wide overview and management
-                </p>
+            {/* Greeting header */}
+            <div className="page-header-row">
+                <div>
+                    <p style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-tertiary)', marginBottom: 4 }}>
+                        {greeting} 👋
+                    </p>
+                    <h1 style={{ margin: 0 }}>
+                        {user?.full_name || 'Principal'}
+                    </h1>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                        Institution-wide overview and management
+                    </p>
+                </div>
             </div>
 
             {/* Stats */}
@@ -113,13 +115,14 @@ export default function PrincipalDashboard() {
             </div>
 
             {/* Department Overview */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>Department Overview</h2>
+            <div className="page-header-row" style={{ marginBottom: 16 }}>
+                <h2 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>Department Overview</h2>
                 <button onClick={() => navigate('/principal/departments')}
                     style={{
                         display: 'flex', alignItems: 'center', gap: 4,
                         fontSize: '0.8rem', fontWeight: 600, color: '#1A3C6E',
                         background: 'none', border: 'none', cursor: 'pointer',
+                        flexShrink: 0,
                     }}>
                     View All <HiOutlineArrowRight size={14} />
                 </button>

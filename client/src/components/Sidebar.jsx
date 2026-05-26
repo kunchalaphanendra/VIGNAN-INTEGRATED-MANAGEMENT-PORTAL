@@ -5,7 +5,7 @@ import {
     HiOutlineCalendar, HiOutlineBell as HiOutlineMegaphone, HiOutlineChartBar,
     HiOutlineClipboardCheck, HiOutlineClock, HiOutlineDocumentText, HiOutlineChat,
     HiOutlineBookOpen, HiOutlinePresentationChartBar, HiOutlineFlag,
-    HiOutlineBriefcase, HiOutlineMail, HiOutlineRefresh,
+    HiOutlineBriefcase, HiOutlineMail, HiOutlineRefresh, HiOutlineDatabase,
 } from 'react-icons/hi';
 
 const roleColors = {
@@ -80,6 +80,9 @@ const menuItems = {
         sec('GENERAL'),
         { to: '/hod/calendar',   icon: HiOutlineCalendar,  label: 'Calendar' },
         { to: '/hod/placements', icon: HiOutlineBriefcase, label: 'Placements' },
+
+        sec('SYSTEM'),
+        { to: '/hod/backup', icon: HiOutlineDatabase, label: '🛡 Database Backup' },
     ],
 
     faculty: [

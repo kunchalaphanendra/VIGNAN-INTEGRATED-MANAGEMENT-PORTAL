@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import DashboardLayout from '../../components/DashboardLayout';
 import StatCard from '../../components/StatCard';
-import LoadingSpinner from '../../components/LoadingSpinner';
+import { SkeletonGrid } from '../../components/SkeletonCard';
 import api from '../../utils/api';
+import { useAuth } from '../../context/AuthContext';
 import { HiOutlineClipboardCheck, HiOutlineClock, HiOutlineBookOpen, HiOutlineBell } from 'react-icons/hi';
 import { useNavigate } from 'react-router-dom';
 
 export default function FacultyDashboard() {
+    const { user } = useAuth();
     const [data, setData] = useState(null);
     const [unreadCount, setUnreadCount] = useState(0);
     const [loading, setLoading] = useState(true);
@@ -34,13 +36,27 @@ export default function FacultyDashboard() {
         } catch { }
     };
 
-    if (loading) return <DashboardLayout><LoadingSpinner /></DashboardLayout>;
+    if (loading) return (
+        <DashboardLayout>
+            <div style={{ marginBottom: 24 }}><SkeletonGrid count={4} cols="repeat(2, 1fr)" /></div>
+        </DashboardLayout>
+    );
+
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
 
     return (
         <DashboardLayout>
-            <div style={{ marginBottom: 28 }}>
-                <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em', margin: 0 }}>Faculty Dashboard</h1>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 4 }}>Your classes and activities overview</p>
+            <div className="page-header-row">
+                <div>
+                    <p style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-tertiary)', marginBottom: 4 }}>
+                        {greeting} 👋
+                    </p>
+                    <h1 style={{ margin: 0 }}>{user?.full_name || 'Faculty'}</h1>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 4, textTransform: 'capitalize' }}>
+                        Faculty - {user?.department_name || 'Academic overview'}
+                    </p>
+                </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16, marginBottom: 28 }}>
@@ -61,18 +77,31 @@ export default function FacultyDashboard() {
                         <p style={{ fontSize: '0.85rem', color: 'var(--text-tertiary)' }}>No classes scheduled today</p>
                     </div>
                 ) : (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+                    // Horizontal scroll strip — only THIS row scrolls, not the page
+                    <div style={{
+                        display: 'flex',
+                        gap: 14,
+                        overflowX: 'auto',
+                        WebkitOverflowScrolling: 'touch',
+                        paddingBottom: 6,
+                        // Hide scrollbar on mobile for clean look
+                        scrollbarWidth: 'none',
+                        msOverflowStyle: 'none',
+                    }}>
                         {data.today_classes.map((cls, i) => (
                             <div key={i} style={{
                                 borderRadius: 14, padding: '14px 16px',
                                 display: 'flex', alignItems: 'center', gap: 14,
                                 background: 'var(--bg-card)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
+                                // Fixed width card so they don't shrink — the container scrolls
+                                minWidth: 260, flexShrink: 0,
                             }}>
                                 <div style={{
                                     width: 48, height: 48, borderRadius: 12,
                                     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                                     color: 'white', fontSize: '0.7rem', fontWeight: 700,
                                     background: 'linear-gradient(135deg, #1565C0, #42A5F5)',
+                                    flexShrink: 0,
                                 }}>
                                     <span>{cls.start_time?.substring(0, 5)}</span>
                                     <span style={{ fontSize: '0.6rem', opacity: 0.7 }}>{cls.end_time?.substring(0, 5)}</span>
@@ -86,6 +115,7 @@ export default function FacultyDashboard() {
                                         fontSize: '0.75rem', padding: '6px 14px', borderRadius: 8,
                                         fontWeight: 600, color: 'white', border: 'none', cursor: 'pointer',
                                         background: 'linear-gradient(135deg, #1565C0, #42A5F5)',
+                                        flexShrink: 0,
                                     }}>Mark</button>
                             </div>
                         ))}
@@ -96,7 +126,7 @@ export default function FacultyDashboard() {
             {/* My Subjects */}
             <div style={{ marginBottom: 28 }}>
                 <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 14 }}>My Subjects</h2>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+                <div className="stat-grid-3" style={{ display: 'grid', gap: 14 }}>
                     {(data?.attendance_summary || []).map((s, i) => (
                         <div key={i} style={{
                             borderRadius: 14, padding: 16, transition: 'all 0.2s ease',

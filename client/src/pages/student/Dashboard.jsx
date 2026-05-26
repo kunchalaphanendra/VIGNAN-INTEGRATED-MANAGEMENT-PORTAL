@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import DashboardLayout from '../../components/DashboardLayout';
 import StatCard from '../../components/StatCard';
-import LoadingSpinner from '../../components/LoadingSpinner';
+import { SkeletonGrid } from '../../components/SkeletonCard';
 import api from '../../utils/api';
+import { useAuth } from '../../context/AuthContext';
 import { HiOutlineClipboardCheck, HiOutlineDocumentText, HiOutlineCalendar, HiOutlineChartBar } from 'react-icons/hi';
 
 export default function StudentDashboard() {
+    const { user } = useAuth();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
 
@@ -19,7 +21,12 @@ export default function StudentDashboard() {
         finally { setLoading(false); }
     };
 
-    if (loading) return <DashboardLayout><LoadingSpinner /></DashboardLayout>;
+    if (loading) return (
+        <DashboardLayout>
+            <div style={{ marginBottom: 24 }}><SkeletonGrid count={4} /></div>
+            <div style={{ marginBottom: 24 }}><SkeletonGrid count={2} cols="repeat(auto-fill, minmax(280px,1fr))" /></div>
+        </DashboardLayout>
+    );
 
     const att = data?.overall_attendance || {};
     const pct = Number(att.percentage) || 0;
@@ -30,11 +37,21 @@ export default function StudentDashboard() {
     const circumference = 2 * Math.PI * radius;
     const strokeDashoffset = circumference - (pct / 100) * circumference;
 
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
+
     return (
         <DashboardLayout>
-            <div style={{ marginBottom: 28 }}>
-                <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em', margin: 0 }}>Student Dashboard</h1>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 4 }}>Your academic overview at a glance</p>
+            <div className="page-header-row">
+                <div>
+                    <p style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-tertiary)', marginBottom: 4 }}>
+                        {greeting} 👋
+                    </p>
+                    <h1 style={{ margin: 0 }}>{user?.full_name || 'Student'}</h1>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 4, textTransform: 'capitalize' }}>
+                        Student - {user?.department_name || 'Academic overview'}
+                    </p>
+                </div>
             </div>
 
             {/* Complaint window banner */}

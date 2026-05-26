@@ -97,34 +97,107 @@ router.post('/attendance-conflicts/:id/resolve', async (req, res) => {
 router.get('/dashboard', async (req, res) => {
     try {
         const deptId = req.user.department_id;
-        const [faculty] = await db.query(
-            "SELECT COUNT(*) as count FROM users WHERE department_id=? AND role='faculty' AND is_active=TRUE", [deptId]
-        );
+        const { year, section } = req.query;
+
+        // Build dynamic filters
+        let studentFilter = ' AND u.department_id = ? AND u.role = \'student\' AND u.is_active = TRUE';
+        const studentParams = [deptId];
+        if (year && year !== 'all' && year !== 'Entire Department') {
+            studentFilter += ' AND sp.year = ?';
+            studentParams.push(year);
+        }
+        if (section && section !== 'all' && section !== 'All Sections') {
+            studentFilter += ' AND sp.section = ?';
+            studentParams.push(section);
+        }
+
+        // 1. Total Students
         const [students] = await db.query(
-            "SELECT COUNT(*) as count FROM users WHERE department_id=? AND role='student' AND is_active=TRUE", [deptId]
+            `SELECT COUNT(*) as count FROM users u JOIN student_profiles sp ON sp.user_id = u.id WHERE 1=1 ${studentFilter}`,
+            studentParams
         );
+
+        // 2. Total Faculty
+        let facultySql = '';
+        const facultyParams = [deptId];
+        if ((year && year !== 'all' && year !== 'Entire Department') || (section && section !== 'all' && section !== 'All Sections')) {
+            facultySql = `
+                SELECT COUNT(DISTINCT fa.faculty_id) as count 
+                FROM faculty_assignments fa
+                JOIN users u ON fa.faculty_id = u.id
+                WHERE fa.department_id = ? AND u.role = 'faculty' AND u.is_active = TRUE
+            `;
+            if (year && year !== 'all' && year !== 'Entire Department') {
+                facultySql += ' AND fa.year = ?';
+                facultyParams.push(year);
+            }
+            if (section && section !== 'all' && section !== 'All Sections') {
+                facultySql += ' AND fa.section = ?';
+                facultyParams.push(section);
+            }
+        } else {
+            facultySql = "SELECT COUNT(*) as count FROM users WHERE department_id=? AND role='faculty' AND is_active=TRUE";
+        }
+        const [faculty] = await db.query(facultySql, facultyParams);
+
+        // 3. Sections list
         const [sections] = await db.query(
             "SELECT DISTINCT section FROM student_profiles WHERE department_id=?", [deptId]
         );
-        // Attendance alerts
-        const [defaulters] = await db.query(`
-      SELECT u.id, u.full_name, sp.roll_number, s.name as subject_name,
-        ROUND(SUM(CASE WHEN a.status IN ('present','late') THEN 1 ELSE 0 END)*100.0/COUNT(*), 2) as percentage
-      FROM attendance a
-      JOIN users u ON a.student_id = u.id
-      JOIN student_profiles sp ON sp.user_id = u.id
-      JOIN faculty_assignments fa ON a.assignment_id = fa.id
-      JOIN subjects s ON fa.subject_id = s.id
-      WHERE fa.department_id = ?
-      GROUP BY a.student_id, a.assignment_id
-      HAVING percentage < 75
-      ORDER BY percentage ASC LIMIT 20
-    `, [deptId]);
-        // Pending leaves
-        const [pendingLeaves] = await db.query(`
-      SELECT COUNT(*) as count FROM faculty_leaves 
-      WHERE hod_id = ? AND status = 'pending'
-    `, [req.user.id]);
+
+        // 4. Defaulters / Attendance Alerts
+        let defaultersSql = `
+            SELECT u.id, u.full_name, sp.roll_number, s.name as subject_name,
+                ROUND(SUM(CASE WHEN a.status IN ('present','late') THEN 1 ELSE 0 END)*100.0/COUNT(*), 2) as percentage
+            FROM attendance a
+            JOIN users u ON a.student_id = u.id
+            JOIN student_profiles sp ON sp.user_id = u.id
+            JOIN faculty_assignments fa ON a.assignment_id = fa.id
+            JOIN subjects s ON fa.subject_id = s.id
+            WHERE fa.department_id = ?
+        `;
+        const defaultersParams = [deptId];
+        if (year && year !== 'all' && year !== 'Entire Department') {
+            defaultersSql += ' AND sp.year = ?';
+            defaultersParams.push(year);
+        }
+        if (section && section !== 'all' && section !== 'All Sections') {
+            defaultersSql += ' AND sp.section = ?';
+            defaultersParams.push(section);
+        }
+        defaultersSql += `
+            GROUP BY a.student_id, a.assignment_id
+            HAVING percentage < 75
+            ORDER BY percentage ASC LIMIT 20
+        `;
+        const [defaulters] = await db.query(defaultersSql, defaultersParams);
+
+        // 5. Pending Leaves
+        let leavesSql = '';
+        const leavesParams = [req.user.id];
+        if ((year && year !== 'all' && year !== 'Entire Department') || (section && section !== 'all' && section !== 'All Sections')) {
+            leavesSql = `
+                SELECT COUNT(DISTINCT fl.id) as count 
+                FROM faculty_leaves fl
+                JOIN users u ON fl.faculty_id = u.id
+                JOIN faculty_assignments fa ON fa.faculty_id = fl.faculty_id
+                WHERE fl.hod_id = ? AND fl.status = 'pending'
+            `;
+            if (year && year !== 'all' && year !== 'Entire Department') {
+                leavesSql += ' AND fa.year = ?';
+                leavesParams.push(year);
+            }
+            if (section && section !== 'all' && section !== 'All Sections') {
+                leavesSql += ' AND fa.section = ?';
+                leavesParams.push(section);
+            }
+        } else {
+            leavesSql = `
+                SELECT COUNT(*) as count FROM faculty_leaves 
+                WHERE hod_id = ? AND status = 'pending'
+            `;
+        }
+        const [pendingLeaves] = await db.query(leavesSql, leavesParams);
 
         res.json({
             total_faculty: faculty[0].count,
@@ -309,24 +382,64 @@ router.delete('/faculty/link/:facultyId', async (req, res) => {
 // PATCH /api/hod/faculty/:id
 router.patch('/faculty/:id', async (req, res) => {
     try {
-        const { full_name, email, phone, designation, qualification } = req.body;
-        await db.query('UPDATE users SET full_name=COALESCE(?,full_name), email=COALESCE(?,email), phone=COALESCE(?,phone) WHERE id=? AND department_id=?',
-            [full_name, email, phone, req.params.id, req.user.department_id]);
-        if (designation || qualification) {
-            await db.query('UPDATE faculty_profiles SET designation=COALESCE(?,designation), qualification=COALESCE(?,qualification) WHERE user_id=?',
-                [designation, qualification, req.params.id]);
+        const { full_name, email, phone, designation, qualification, joining_date, password } = req.body;
+        const deptId = req.user.department_id;
+        const facultyId = req.params.id;
+
+        // Verify the faculty belongs to this HOD's department
+        const [userCheck] = await db.query(
+            "SELECT id FROM users WHERE id = ? AND department_id = ? AND role = 'faculty'",
+            [facultyId, deptId]
+        );
+        if (userCheck.length === 0) {
+            return res.status(404).json({ error: 'Faculty not found in your department' });
         }
-        res.json({ message: 'Faculty updated' });
+
+        // Build dynamic query for users table
+        let userQuery = 'UPDATE users SET full_name = ?, email = ?, phone = ?';
+        const userParams = [full_name || null, email || null, phone || null];
+
+        if (password && password.trim().length >= 8) {
+            const hash = await bcrypt.hash(password, SALT_ROUNDS);
+            userQuery += ', password_hash = ?';
+            userParams.push(hash);
+        }
+
+        userQuery += ' WHERE id = ?';
+        userParams.push(facultyId);
+
+        await db.query(userQuery, userParams);
+
+        // Update or insert faculty profile
+        await db.query(`
+            INSERT INTO faculty_profiles (user_id, designation, qualification, joining_date)
+            VALUES (?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                designation = VALUES(designation),
+                qualification = VALUES(qualification),
+                joining_date = VALUES(joining_date)
+        `, [facultyId, designation || null, qualification || null, joining_date || null]);
+
+        res.json({ message: 'Faculty updated successfully' });
     } catch (err) {
+        console.error('PATCH faculty error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
 
 // DELETE /api/hod/faculty/:id  (deactivate home-dept faculty)
-router.delete('/faculty/:id', async (req, res) => {
+router.delete('/faculty/:id', require('../middleware/confirmPassword'), async (req, res) => {
     try {
         await db.query('UPDATE users SET is_active=FALSE WHERE id=? AND department_id=? AND role="faculty"',
             [req.params.id, req.user.department_id]);
+        
+        try {
+            const { logAction } = require('../utils/auditLogger');
+            await logAction(req.user.id, 'DEACTIVATE_FACULTY', 'users', req.params.id, { department_id: req.user.department_id });
+        } catch (auditErr) {
+            console.error('Failed to log deactivate faculty action:', auditErr.message);
+        }
+
         res.json({ message: 'Faculty deactivated' });
     } catch (err) {
         res.status(500).json({ error: 'Server error' });
@@ -366,7 +479,8 @@ router.post('/students', async (req, res) => {
 });
 
 // POST /api/hod/students/import  — CSV or Excel
-// Expected columns: roll_number, full_name, email, phone, year, semester, section, password
+// Required columns: roll_number, full_name, email, phone, year, semester, section, password
+// Optional columns: parent_name, parent_phone
 router.post('/students/import', uploadImport.single('file'), async (req, res) => {
     const fs = require('fs');
     const path = require('path');
@@ -513,8 +627,11 @@ router.post('/students/import', uploadImport.single('file'), async (req, res) =>
                     [row.full_name, row.email, row.phone, hash, userId]
                 );
                 await conn.query(
-                    'UPDATE student_profiles SET year=?, semester=?, section=? WHERE user_id=?',
-                    [year, sem, row.section, userId]
+                    `UPDATE student_profiles SET year=?, semester=?, section=?,
+                     parent_name=COALESCE(NULLIF(?,\'\'),parent_name),
+                     parent_phone=COALESCE(NULLIF(?,\'\'),parent_phone)
+                     WHERE user_id=?`,
+                    [year, sem, row.section, row.parent_name||'', row.parent_phone||'', userId]
                 );
                 updated++;
             } else {
@@ -524,8 +641,8 @@ router.post('/students/import', uploadImport.single('file'), async (req, res) =>
                     [rollNum, hash, 'student', deptId, row.full_name, row.email, row.phone]
                 );
                 await conn.query(
-                    'INSERT INTO student_profiles (user_id, roll_number, year, semester, section, department_id) VALUES (?,?,?,?,?,?)',
-                    [userResult.insertId, rollNum, year, sem, row.section, deptId]
+                    'INSERT INTO student_profiles (user_id, roll_number, year, semester, section, department_id, parent_name, parent_phone) VALUES (?,?,?,?,?,?,?,?)',
+                    [userResult.insertId, rollNum, year, sem, row.section, deptId, row.parent_name||null, row.parent_phone||null]
                 );
                 inserted++;
             }
@@ -550,6 +667,167 @@ router.post('/students/import', uploadImport.single('file'), async (req, res) =>
 // Kept old endpoint name for backward compatibility (alias)
 router.post('/students/bulk', upload.single('file'), (req, res) => {
     res.status(410).json({ error: 'This endpoint is deprecated. Use /students/import instead.' });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/hod/faculty/import — Bulk import faculty from CSV or Excel
+// Required columns: full_name, email, phone, password
+// Optional columns: designation, qualification, joining_date
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/faculty/import', uploadImport.single('file'), async (req, res) => {
+    const fs   = require('fs');
+    const path = require('path');
+
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const filePath = req.file.path;
+    const ext      = path.extname(req.file.originalname).toLowerCase();
+    const deptId   = req.user.department_id;
+
+    const REQUIRED = ['full_name', 'email', 'phone', 'password'];
+
+    // ── Parse file ─────────────────────────────────────────────────────────
+    let rows = [];
+    try {
+        const cellText = (val) => {
+            if (val === undefined || val === null) return '';
+            if (typeof val === 'object') {
+                if (typeof val.text === 'string') return val.text.trim();
+                if (val.result !== undefined) return String(val.result).trim();
+                if (Array.isArray(val.richText)) return val.richText.map(r => r.text || '').join('').trim();
+            }
+            return String(val).trim();
+        };
+
+        if (ext === '.csv') {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const lines   = content.split(/\r?\n/).filter(l => l.trim());
+            if (lines.length < 2) return res.status(400).json({ error: 'File is empty or has no data rows' });
+            const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
+            for (let i = 1; i < lines.length; i++) {
+                const values = lines[i].split(',').map(v => v.trim());
+                const obj = {};
+                headers.forEach((h, idx) => { obj[h] = values[idx] ?? ''; });
+                obj._row = i + 1;
+                rows.push(obj);
+            }
+        } else if (ext === '.xlsx' || ext === '.xls') {
+            const ExcelJS = require('exceljs');
+            const wb = new ExcelJS.Workbook();
+            await wb.xlsx.readFile(filePath);
+            const ws = wb.worksheets[0];
+            if (!ws) return res.status(400).json({ error: 'Excel file has no worksheets' });
+            const headerRow = ws.getRow(1).values.slice(1);
+            const headers   = headerRow.map(h => cellText(h).toLowerCase().replace(/\s+/g, '_'));
+            ws.eachRow((row, rowIndex) => {
+                if (rowIndex === 1) return;
+                const vals = row.values.slice(1);
+                const obj  = {};
+                headers.forEach((h, idx) => { obj[h] = cellText(vals[idx]); });
+                obj._row = rowIndex;
+                rows.push(obj);
+            });
+        } else {
+            return res.status(400).json({ error: 'Unsupported file type. Please upload .csv or .xlsx' });
+        }
+    } catch (parseErr) {
+        return res.status(400).json({ error: 'Failed to parse file: ' + parseErr.message });
+    } finally {
+        try { fs.unlinkSync(filePath); } catch (_) {}
+    }
+
+    if (rows.length === 0) return res.status(400).json({ error: 'No data rows found in the file' });
+
+    // ── Validate ───────────────────────────────────────────────────────────
+    const validationErrors = [];
+    for (const row of rows) {
+        const rowNum = row._row;
+        for (const field of REQUIRED) {
+            if (!row[field] || row[field].trim() === '') {
+                validationErrors.push(`Row ${rowNum}: "${field}" is required but missing or empty`);
+            }
+        }
+        if (validationErrors.length > 0) continue;
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) {
+            validationErrors.push(`Row ${rowNum}: "${row.email}" is not a valid email`);
+        }
+        if (!/^\d{10}$/.test(row.phone)) {
+            validationErrors.push(`Row ${rowNum}: Phone "${row.phone}" must be exactly 10 digits`);
+        }
+        if (row.password.length < 6) {
+            validationErrors.push(`Row ${rowNum}: Password must be at least 6 characters`);
+        }
+    }
+    if (validationErrors.length > 0) {
+        return res.status(422).json({
+            error: `File rejected — ${validationErrors.length} error(s) found. Fix and re-upload.`,
+            details: validationErrors,
+        });
+    }
+
+    // ── Upsert ─────────────────────────────────────────────────────────────
+    let inserted = 0, updated = 0;
+    const conn = await db.getConnection();
+    try {
+        await conn.beginTransaction();
+
+        for (const row of rows) {
+            const hash = await bcrypt.hash(row.password, SALT_ROUNDS);
+
+            // Check if a faculty with this email already exists in this dept
+            const [existing] = await conn.query(
+                `SELECT id FROM users WHERE email=? AND department_id=? AND role='faculty'`,
+                [row.email, deptId]
+            );
+
+            if (existing.length > 0) {
+                const userId = existing[0].id;
+                await conn.query(
+                    `UPDATE users SET full_name=?, phone=?, password_hash=? WHERE id=?`,
+                    [row.full_name, row.phone, hash, userId]
+                );
+                await conn.query(
+                    `UPDATE faculty_profiles SET
+                       designation=COALESCE(NULLIF(?,''),designation),
+                       qualification=COALESCE(NULLIF(?,''),qualification)
+                     WHERE user_id=?`,
+                    [row.designation||'', row.qualification||'', userId]
+                );
+                updated++;
+            } else {
+                // Auto-generate login ID: VIG-FAC-XXX
+                const [[{ maxId }]] = await conn.query(
+                    `SELECT COALESCE(MAX(CAST(SUBSTRING_INDEX(login_id,'-',-1) AS UNSIGNED)),0)+1 AS maxId
+                     FROM users WHERE role='faculty'`
+                );
+                const loginId = `VIG-FAC-${String(maxId).padStart(3,'0')}`;
+
+                const [uRes] = await conn.query(
+                    `INSERT INTO users (login_id, password_hash, role, department_id, full_name, email, phone)
+                     VALUES (?,?,?,?,?,?,?)`,
+                    [loginId, hash, 'faculty', deptId, row.full_name, row.email, row.phone]
+                );
+                await conn.query(
+                    `INSERT INTO faculty_profiles (user_id, designation, qualification, joining_date)
+                     VALUES (?,?,?,?)`,
+                    [uRes.insertId, row.designation||null, row.qualification||null, row.joining_date||null]
+                );
+                inserted++;
+            }
+        }
+
+        await conn.commit();
+        res.json({
+            message: `Faculty import complete: ${inserted} added, ${updated} updated`,
+            inserted, updated, total: rows.length,
+        });
+    } catch (err) {
+        await conn.rollback();
+        console.error('Faculty import error:', err);
+        res.status(500).json({ error: 'Database error during import: ' + err.message });
+    } finally {
+        conn.release();
+    }
 });
 
 // GET /api/hod/students/stats — real per-student attendance % + CGPA/SGPA + backlogs
@@ -680,6 +958,123 @@ router.get('/students/stats', async (req, res) => {
     }
 });
 
+// GET /api/hod/priority-list
+router.get('/priority-list', async (req, res) => {
+    try {
+        const deptId = req.user.department_id;
+        const { year, section, sortBy, search } = req.query;
+
+        let sql = `
+            SELECT 
+                u.id, 
+                u.full_name, 
+                sp.roll_number, 
+                sp.year, 
+                sp.section,
+                COALESCE(sc.cgpa, grade_calc.cgpa) AS cgpa,
+                COALESCE(sc.sgpa, grade_calc.sgpa) AS sgpa,
+                att_calc.percentage AS att,
+                COALESCE(sb_calc.backlogs, grade_calc.backlogs, 0) AS backlogs,
+                marks_calc.marks_avg AS marks_average
+            FROM users u
+            JOIN student_profiles sp ON sp.user_id = u.id
+            LEFT JOIN (
+                SELECT student_id, cgpa, sgpa 
+                FROM student_cgpa sc1
+                WHERE id = (SELECT id FROM student_cgpa sc2 WHERE sc2.student_id = sc1.student_id ORDER BY updated_at DESC LIMIT 1)
+            ) sc ON sc.student_id = u.id
+            LEFT JOIN (
+                SELECT 
+                    g.student_id,
+                    ROUND(SUM(g.grade_points * s.credits) / NULLIF(SUM(s.credits), 0), 2) AS cgpa,
+                    ROUND(SUM(CASE WHEN g.semester = (SELECT MAX(semester) FROM grades WHERE student_id = g.student_id) THEN g.grade_points * s.credits ELSE 0 END) / 
+                          NULLIF(SUM(CASE WHEN g.semester = (SELECT MAX(semester) FROM grades WHERE student_id = g.student_id) THEN s.credits ELSE 0 END), 0), 2) AS sgpa,
+                    SUM(CASE WHEN g.grade_letter = 'F' THEN 1 ELSE 0 END) AS backlogs
+                FROM grades g
+                JOIN subjects s ON s.id = g.subject_id
+                GROUP BY g.student_id
+            ) grade_calc ON grade_calc.student_id = u.id
+            LEFT JOIN (
+                SELECT 
+                    a.student_id,
+                    ROUND(SUM(CASE WHEN a.status IN ('present','late') THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*), 0), 2) AS percentage
+                FROM attendance a
+                JOIN faculty_assignments fa ON fa.id = a.assignment_id
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM attendance_sessions ats
+                    WHERE ats.assignment_id  = a.assignment_id
+                      AND DATE(ats.session_date) = DATE(a.date)
+                      AND (a.period_number IS NULL OR ats.period_number = a.period_number)
+                      AND ats.outside_window = 1
+                      AND (ats.hod_confirmed IS NULL OR ats.hod_confirmed = 0)
+                )
+                GROUP BY a.student_id
+            ) att_calc ON att_calc.student_id = u.id
+            LEFT JOIN (
+                SELECT student_id, SUM(backlog_count) AS backlogs
+                FROM student_backlogs
+                WHERE status = 'active'
+                GROUP BY student_id
+            ) sb_calc ON sb_calc.student_id = u.id
+            LEFT JOIN (
+                SELECT student_id, ROUND(AVG(marks_obtained), 2) AS marks_avg
+                FROM marks
+                GROUP BY student_id
+            ) marks_calc ON marks_calc.student_id = u.id
+            WHERE u.role = 'student' AND u.is_active = TRUE AND sp.department_id = ?
+        `;
+
+        const params = [deptId];
+
+        if (year && year !== 'all' && year !== 'Entire Department') {
+            sql += ' AND sp.year = ?';
+            params.push(year);
+        }
+        if (section && section !== 'all' && section !== 'All Sections') {
+            sql += ' AND sp.section = ?';
+            params.push(section);
+        }
+        if (search) {
+            sql += ' AND (u.full_name LIKE ? OR sp.roll_number LIKE ?)';
+            params.push(`%${search}%`, `%${search}%`);
+        }
+
+        // Apply custom sorting
+        let orderClause = ' ORDER BY ';
+        switch (sortBy) {
+            case 'sgpa':
+                orderClause += 'CASE WHEN COALESCE(sc.sgpa, grade_calc.sgpa) IS NULL THEN 1 ELSE 0 END, COALESCE(sc.sgpa, grade_calc.sgpa) DESC, COALESCE(sc.cgpa, grade_calc.cgpa) DESC';
+                break;
+            case 'attendance':
+                orderClause += 'CASE WHEN att_calc.percentage IS NULL THEN 1 ELSE 0 END, att_calc.percentage DESC, COALESCE(sc.cgpa, grade_calc.cgpa) DESC';
+                break;
+            case 'lowest_attendance':
+                orderClause += 'CASE WHEN att_calc.percentage IS NULL THEN 1 ELSE 0 END, att_calc.percentage ASC, COALESCE(sc.cgpa, grade_calc.cgpa) ASC';
+                break;
+            case 'least_backlogs':
+                orderClause += 'COALESCE(sb_calc.backlogs, grade_calc.backlogs, 0) ASC, CASE WHEN COALESCE(sc.cgpa, grade_calc.cgpa) IS NULL THEN 1 ELSE 0 END, COALESCE(sc.cgpa, grade_calc.cgpa) DESC';
+                break;
+            case 'most_backlogs':
+                orderClause += 'COALESCE(sb_calc.backlogs, grade_calc.backlogs, 0) DESC, CASE WHEN COALESCE(sc.cgpa, grade_calc.cgpa) IS NULL THEN 1 ELSE 0 END, COALESCE(sc.cgpa, grade_calc.cgpa) DESC';
+                break;
+            case 'marks_avg':
+                orderClause += 'CASE WHEN marks_calc.marks_avg IS NULL THEN 1 ELSE 0 END, marks_calc.marks_avg DESC, COALESCE(sc.cgpa, grade_calc.cgpa) DESC';
+                break;
+            case 'cgpa':
+            default:
+                orderClause += 'CASE WHEN COALESCE(sc.cgpa, grade_calc.cgpa) IS NULL THEN 1 ELSE 0 END, COALESCE(sc.cgpa, grade_calc.cgpa) DESC, CASE WHEN att_calc.percentage IS NULL THEN 1 ELSE 0 END, att_calc.percentage DESC';
+                break;
+        }
+
+        sql += orderClause;
+
+        const [rows] = await db.query(sql, params);
+        res.json({ students: rows });
+    } catch (err) {
+        console.error('HOD priority list error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
 
 // GET /api/hod/students
 router.get('/students', async (req, res) => {
@@ -785,7 +1180,7 @@ router.get('/students/promotable', async (req, res) => {
 // POST /api/hod/students/promote
 // mode: 'year'     → year+1, sem = first sem of new year; Year 4 → graduated
 // mode: 'semester' → sem+1 only, year unchanged
-router.post('/students/promote', async (req, res) => {
+router.post('/students/promote', require('../middleware/confirmPassword'), async (req, res) => {
     const { student_ids, mode } = req.body;
     if (!Array.isArray(student_ids) || student_ids.length === 0)
         return res.status(400).json({ error: 'student_ids array is required' });
@@ -850,6 +1245,14 @@ router.post('/students/promote', async (req, res) => {
         }
 
         await conn.commit();
+
+        try {
+            const { logAction } = require('../utils/auditLogger');
+            await logAction(req.user.id, 'PROMOTE_STUDENTS', 'student_profiles', null, { student_ids, mode, promoted, graduated, advanced });
+        } catch (auditErr) {
+            console.error('Failed to log promote students action:', auditErr.message);
+        }
+
         res.json({
             message: mode === 'semester'
                 ? `Semester advanced for ${advanced} student(s)`
@@ -1298,10 +1701,16 @@ router.patch('/faculty-leaves/:id', async (req, res) => {
         // Notify faculty
         const [leave] = await db.query('SELECT faculty_id FROM faculty_leaves WHERE id=?', [req.params.id]);
         if (leave.length > 0) {
-            await db.query(
-                'INSERT INTO notifications (user_id, title, message, type, reference_id) VALUES (?,?,?,?,?)',
-                [leave[0].faculty_id, `Leave ${status}`, `Your leave request has been ${status}. ${remarks || ''}`, 'leave', req.params.id]
-            );
+            const { sendNotification } = require('../utils/notificationService');
+            await sendNotification({
+                recipient_id: leave[0].faculty_id,
+                title: `Leave ${status}`,
+                message: `Your leave request has been ${status}. ${remarks || ''}`,
+                type: 'leave',
+                sender_role: req.user.role,
+                sender_id: req.user.id,
+                target_url: `/faculty/my-leaves`
+            });
         }
 
         res.json({ message: `Leave ${status}` });
@@ -1389,12 +1798,21 @@ router.post('/calendar', async (req, res) => {
 // GET /api/hod/subjects
 router.get('/subjects', async (req, res) => {
     try {
-        const [rows] = await db.query(
-            'SELECT * FROM subjects WHERE department_id = ? ORDER BY semester, name',
-            [req.user.department_id]
-        );
+        const { year } = req.query;
+        let queryStr = 'SELECT * FROM subjects WHERE department_id = ?';
+        const params = [req.user.department_id];
+
+        if (year && year !== 'all') {
+            queryStr += ' AND academic_year = ?';
+            params.push(parseInt(year));
+        }
+
+        queryStr += ' ORDER BY academic_year, semester, name';
+
+        const [rows] = await db.query(queryStr, params);
         res.json({ subjects: rows });
     } catch (err) {
+        console.error('GET subjects error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -1402,15 +1820,39 @@ router.get('/subjects', async (req, res) => {
 // POST /api/hod/subjects
 router.post('/subjects', async (req, res) => {
     try {
-        const { name, code, semester, credits } = req.body;
-        if (!name || !code || !semester) return res.status(400).json({ error: 'Name, code, semester required' });
+        const { name, code, semester, credits, academic_year } = req.body;
+        if (!name || !code || !semester || !academic_year) {
+            return res.status(400).json({ error: 'Name, code, semester, and academic year are required' });
+        }
+        
+        const yearInt = parseInt(academic_year);
+        if (![1, 2, 3, 4].includes(yearInt)) {
+            return res.status(400).json({ error: 'Academic year must be 1, 2, 3, or 4' });
+        }
+
         const [result] = await db.query(
-            'INSERT INTO subjects (name, code, department_id, semester, credits) VALUES (?,?,?,?,?)',
-            [name, code, req.user.department_id, semester, credits || 3]
+            'INSERT INTO subjects (name, code, department_id, semester, credits, academic_year) VALUES (?,?,?,?,?,?)',
+            [name, code, req.user.department_id, semester, credits || 3, yearInt]
         );
+
+        try {
+            const { notifyStudentsInDept } = require('../utils/notificationService');
+            await notifyStudentsInDept({
+                deptId: req.user.department_id,
+                year: yearInt,
+                title: 'New Subject Added',
+                message: `A new subject "${name}" (${code}) has been added to your curriculum for Sem ${semester}.`,
+                type: 'academic',
+                target_url: `/student/marks`
+            });
+        } catch (notifErr) {
+            console.error('Subject addition notification failed:', notifErr);
+        }
+
         res.status(201).json({ message: 'Subject created', id: result.insertId });
     } catch (err) {
         if (err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Subject code exists' });
+        console.error('POST subjects error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -1427,8 +1869,44 @@ router.get('/assignments', async (req, res) => {
       WHERE fa.department_id = ?
       ORDER BY fa.year, fa.section, s.name
     `, [req.user.department_id]);
-        res.json({ assignments: rows });
+
+        // Group rows by Year -> Section
+        const grouped = {};
+        rows.forEach(r => {
+            const yearStr = r.year === 1 ? '1st Year' : r.year === 2 ? '2nd Year' : r.year === 3 ? '3rd Year' : '4th Year';
+            const secKey = `Section ${r.section}`;
+
+            if (!grouped[yearStr]) {
+                grouped[yearStr] = {};
+            }
+            if (!grouped[yearStr][secKey]) {
+                grouped[yearStr][secKey] = {
+                    class_teacher: null,
+                    subjects: []
+                };
+            }
+
+            if (r.is_class_teacher) {
+                grouped[yearStr][secKey].class_teacher = {
+                    id: r.faculty_id,
+                    name: r.faculty_name,
+                    login_id: r.faculty_login
+                };
+            }
+
+            grouped[yearStr][secKey].subjects.push({
+                id: r.id,
+                subject: r.subject_name,
+                subject_code: r.subject_code,
+                faculty: r.faculty_name,
+                faculty_login: r.faculty_login,
+                is_class_teacher: r.is_class_teacher
+            });
+        });
+
+        res.json({ assignments: grouped, raw: rows });
     } catch (err) {
+        console.error('GET assignments error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -1436,14 +1914,72 @@ router.get('/assignments', async (req, res) => {
 // POST /api/hod/assignments — Assign faculty to subject/section
 router.post('/assignments', async (req, res) => {
     try {
-        const { faculty_id, subject_id, year, section, academic_year_id, is_class_teacher } = req.body;
+        const { faculty_id, subject_id, section, academic_year_id, is_class_teacher } = req.body;
+        const yearVal = req.body.academic_year || req.body.year;
+
+        if (!faculty_id || !subject_id || !yearVal || !section) {
+            return res.status(400).json({ error: 'Faculty, subject, year, and section are required' });
+        }
+
+        // Find active academic year ID if not provided
+        let ayId = academic_year_id;
+        if (!ayId) {
+            const [ayRows] = await db.query('SELECT id FROM academic_years WHERE is_current = TRUE LIMIT 1');
+            ayId = ayRows.length > 0 ? ayRows[0].id : 1;
+        }
+
+        // If is_class_teacher is true, reset all other assignments in this year/section
+        if (is_class_teacher) {
+            await db.query(
+                `UPDATE faculty_assignments 
+                 SET is_class_teacher = FALSE 
+                 WHERE department_id = ? AND year = ? AND section = ?`,
+                [req.user.department_id, yearVal, section]
+            );
+        }
+
         const [result] = await db.query(
             `INSERT INTO faculty_assignments (faculty_id, subject_id, department_id, year, section, academic_year_id, is_class_teacher)
-       VALUES (?,?,?,?,?,?,?)`,
-            [faculty_id, subject_id, req.user.department_id, year, section, academic_year_id, is_class_teacher || false]
+             VALUES (?,?,?,?,?,?,?)`,
+            [faculty_id, subject_id, req.user.department_id, yearVal, section, ayId, is_class_teacher || false]
         );
+
+        try {
+            const [subRows] = await db.query('SELECT name, code FROM subjects WHERE id = ?', [subject_id]);
+            const subjectName = subRows[0]?.name || 'a subject';
+            const { sendNotification, notifyStudentsInDept } = require('../utils/notificationService');
+            
+            // Notify faculty
+            await sendNotification({
+                recipient_id: faculty_id,
+                title: 'New Class Assigned',
+                message: `You have been assigned to teach "${subjectName}" for Year ${yearVal} - Section ${section}.` + 
+                         (is_class_teacher ? ' You are also designated as the Class Teacher.' : ''),
+                type: 'academic',
+                sender_role: req.user.role,
+                sender_id: req.user.id,
+                target_url: `/faculty/timetable`
+            });
+
+            // Notify students
+            await notifyStudentsInDept({
+                deptId: req.user.department_id,
+                year: yearVal,
+                section,
+                title: is_class_teacher ? 'New Class Teacher Appointed' : 'Subject Faculty Assigned',
+                message: is_class_teacher 
+                    ? `A new Class Teacher has been appointed for your class (Year ${yearVal} - Section ${section}).`
+                    : `Faculty has been assigned for subject "${subjectName}" (Year ${yearVal} - Section ${section}).`,
+                type: 'academic',
+                target_url: `/student/timetable`
+            });
+        } catch (notifErr) {
+            console.error('Assignment notification failed:', notifErr);
+        }
+
         res.status(201).json({ message: 'Assignment created', id: result.insertId });
     } catch (err) {
+        console.error('POST assignments error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -1540,6 +2076,21 @@ router.post('/placements', async (req, res) => {
                 deptId,
             ]
         );
+        try {
+            const { sendNotification } = require('../utils/notificationService');
+            await sendNotification({
+                recipient_role: 'student',
+                department_id: deptId,
+                title: 'New Placement Opportunity',
+                message: `New job opening at ${company} for role "${role}".`,
+                type: 'placement',
+                sender_role: req.user.role,
+                sender_id: req.user.id,
+                target_url: `/student/placements`
+            });
+        } catch (notifErr) {
+            console.error('Placement notification failed:', notifErr);
+        }
         res.status(201).json({ message: 'Job posted', id: result.insertId });
     } catch (err) {
         console.error('HOD create placement error:', err);
@@ -1930,6 +2481,22 @@ router.post('/timetable', async (req, res) => {
              ON DUPLICATE KEY UPDATE slots_json = VALUES(slots_json), updated_at = NOW()`,
             [req.user.department_id, year, section, JSON.stringify(slots)]
         );
+
+        try {
+            const { notifyStudentsInDept } = require('../utils/notificationService');
+            await notifyStudentsInDept({
+                deptId: req.user.department_id,
+                year,
+                section,
+                title: 'Timetable Updated',
+                message: `Your class timetable for Year ${year} - Section ${section} has been updated by the HOD.`,
+                type: 'academic',
+                target_url: `/student/timetable`
+            });
+        } catch (notifErr) {
+            console.error('Timetable notification failed:', notifErr);
+        }
+
         res.json({ message: 'Timetable saved' });
     } catch (err) {
         console.error('POST timetable error:', err);
@@ -2197,6 +2764,23 @@ router.patch('/complaints/:id/status', async (req, res) => {
             'UPDATE complaints SET status = ?, admin_notes = ?, updated_at = NOW() WHERE id = ?',
             [status, admin_notes || null, req.params.id]
         );
+        try {
+            const [compl] = await db.query('SELECT student_id, complaint_ref, is_anonymous FROM complaints WHERE id = ?', [req.params.id]);
+            if (compl.length > 0 && compl[0].student_id && !compl[0].is_anonymous) {
+                const { sendNotification } = require('../utils/notificationService');
+                await sendNotification({
+                    recipient_id: compl[0].student_id,
+                    title: 'Complaint Status Update',
+                    message: `Your complaint (${compl[0].complaint_ref}) status has been updated to "${status}".`,
+                    type: 'complaint',
+                    sender_role: req.user.role,
+                    sender_id: req.user.id,
+                    target_url: `/student/complaints`
+                });
+            }
+        } catch (notifErr) {
+            console.error('Complaint status update notification failed:', notifErr);
+        }
         res.json({ message: 'Complaint status updated' });
     } catch (err) {
         console.error('HOD update complaint status error:', err);
@@ -2209,7 +2793,7 @@ router.patch('/complaints/:id/status', async (req, res) => {
 // Runs each deletion independently (no single transaction) so that a
 // missing optional table doesn't poison the whole operation.
 // ═══════════════════════════════════════════════════════════════════
-router.post('/reset-data', async (req, res) => {
+router.post('/reset-data', require('../middleware/confirmPassword'), async (req, res) => {
     const {
         year,
         clear_attendance, clear_marks, clear_cgpa,
@@ -2229,7 +2813,7 @@ router.post('/reset-data', async (req, res) => {
             summary[label] = r.affectedRows;
         } catch (e) {
             if (e.code === 'ER_NO_SUCH_TABLE') {
-                summary[label] = 0; // table doesn't exist yet — fine
+                summary[label] = 0;
             } else {
                 errors.push(`${label}: ${e.message}`);
                 console.error(`[reset-data] ${label}:`, e.message);
@@ -2237,8 +2821,54 @@ router.post('/reset-data', async (req, res) => {
         }
     };
 
+    // Archive marks before deleting so data can be recovered
+    const archiveMarks = async (studentIds, subjectIds) => {
+        try {
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS marks_archive (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    archive_year INT, archive_dept_id INT,
+                    student_id INT, subject_id INT, exam_type VARCHAR(50),
+                    marks_obtained DECIMAL(5,2), max_marks DECIMAL(5,2),
+                    is_published TINYINT(1), entered_by INT,
+                    INDEX(student_id), INDEX(archive_dept_id)
+                )
+            `);
+            await db.query(`
+                INSERT INTO marks_archive
+                    (archive_year, archive_dept_id, student_id, subject_id, exam_type, marks_obtained, max_marks, is_published, entered_by)
+                SELECT ?, ?, student_id, subject_id, exam_type, marks_obtained, max_marks, is_published, entered_by
+                FROM marks WHERE student_id IN (?) AND subject_id IN (?)
+            `, [year, deptId, studentIds, subjectIds]);
+        } catch (e) { console.warn('[reset-data] marks archive warning:', e.message); }
+    };
+
+    // Archive attendance before deleting
+    const archiveAttendance = async (studentIds) => {
+        try {
+            await db.query(`
+                CREATE TABLE IF NOT EXISTS attendance_archive (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    archive_year INT, archive_dept_id INT,
+                    student_id INT, assignment_id INT, date DATE,
+                    status ENUM('present','absent','late','excused'),
+                    session_id INT,
+                    INDEX(student_id), INDEX(archive_dept_id)
+                )
+            `);
+            await db.query(`
+                INSERT INTO attendance_archive
+                    (archive_year, archive_dept_id, student_id, assignment_id, date, status, session_id)
+                SELECT ?, ?, student_id, assignment_id, date, status, session_id
+                FROM attendance WHERE student_id IN (?)
+            `, [year, deptId, studentIds]);
+        } catch (e) { console.warn('[reset-data] attendance archive warning:', e.message); }
+    };
+
     try {
-        // ── Student IDs for this dept + year ──────────────────────────
+        // -- Student IDs for this dept + year
         const [stuRows] = await db.query(`
             SELECT u.id FROM users u
             JOIN student_profiles sp ON sp.user_id = u.id
@@ -2266,13 +2896,11 @@ router.post('/reset-data', async (req, res) => {
         // from Year 2 → Year 3 still has attendance rows under Year-2 assignments).
         // So we delete by student_id (who they ARE now), not by assignment_id.
         if (clear_attendance && studentIds.length > 0) {
-            // Delete all attendance records for these students
+            await archiveAttendance(studentIds); // save copy before delete
             await safeDelete('attendance_records',
                 'DELETE FROM attendance WHERE student_id IN (?)',
                 [studentIds]
             );
-            // Clean up attendance_sessions that now have zero remaining attendance rows
-            // (sessions with no student entries are orphaned after above delete)
             await safeDelete('attendance_sessions',
                 `DELETE FROM attendance_sessions WHERE id NOT IN (
                     SELECT DISTINCT session_id FROM attendance WHERE session_id IS NOT NULL
@@ -2289,6 +2917,7 @@ router.post('/reset-data', async (req, res) => {
         // Delete marks for these students scoped to this dept's subjects
         if (clear_marks && studentIds.length > 0) {
             if (subjectIds.length > 0) {
+                await archiveMarks(studentIds, subjectIds); // save copy before delete
                 await safeDelete('marks',
                     'DELETE FROM marks WHERE student_id IN (?) AND subject_id IN (?)',
                     [studentIds, subjectIds]
@@ -2334,6 +2963,14 @@ router.post('/reset-data', async (req, res) => {
         }
 
         console.log(`[reset-data] HOD dept=${deptId} year=${year}`, summary);
+
+        try {
+            const { logAction } = require('../utils/auditLogger');
+            await logAction(req.user.id, 'RESET_DATA', 'departments', deptId, { year, summary, errors });
+        } catch (auditErr) {
+            console.error('Failed to log reset data action:', auditErr.message);
+        }
+
         res.json({
             message: errors.length > 0 ? 'Reset completed with some warnings' : 'Reset complete',
             summary,

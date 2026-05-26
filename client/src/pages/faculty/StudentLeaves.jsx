@@ -23,6 +23,7 @@ export default function FacultyStudentLeaves() {
     const cols = [
         { key: 'name', header: 'Student', accessor: 'full_name' },
         { key: 'roll', header: 'Roll No', accessor: 'roll_number' },
+        { key: 'class', header: 'Class', render: r => r.year ? `${r.dept_code || ''} - Y${r.year} (${r.section || ''})` : '—' },
         { key: 'type', header: 'Type', accessor: 'leave_type' },
         { key: 'from', header: 'From', accessor: r => new Date(r.from_date).toLocaleDateString() },
         { key: 'to', header: 'To', accessor: r => new Date(r.to_date).toLocaleDateString() },

@@ -132,9 +132,11 @@ export default function PromoteStudents() {
     const toggleOne = id => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
 
     const doPromote = async () => {
+        const password = window.prompt('Please enter your HOD password to confirm:');
+        if (!password) return;
         setPromoting(true);
         try {
-            const r = await api.post('/hod/students/promote', { student_ids: [...selected], mode: tab });
+            const r = await api.post('/hod/students/promote', { student_ids: [...selected], mode: tab, password });
             setResult(r.data);
             setShowConfirm(false);
             await load();

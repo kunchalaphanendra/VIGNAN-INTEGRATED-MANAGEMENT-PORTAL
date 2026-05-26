@@ -6,8 +6,92 @@ import api from '../../utils/api';
 import { HiOutlineTrash, HiOutlineChevronDown, HiOutlineChevronUp } from 'react-icons/hi';
 
 /* ─── DeptTabs — uses REAL data from enriched API ───────────────────────────── */
-function DeptTabs({ dept, students, faculty }) {
+function DeptTabs({ dept, students: allStudents = [], faculty }) {
     const [tab, setTab] = useState('students');
+    const [studentsData, setStudentsData] = useState({ summary: {}, data: {}, students: [] });
+    const [loadingStudents, setLoadingStudents] = useState(true);
+    
+    // Filter states
+    const [year, setYear] = useState('all');
+    const [section, setSection] = useState('all');
+    const [sortBy, setSortBy] = useState('cgpa');
+    const [search, setSearch] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+
+    // Collapsible states
+    const [expandedYears, setExpandedYears] = useState({
+        '1st Year': false,
+        '2nd Year': false,
+        '3rd Year': false,
+        '4th Year': false
+    });
+    const [expandedSections, setExpandedSections] = useState({});
+    
+    // Quick View Modal
+    const [viewStudent, setViewStudent] = useState(null);
+
+    // Debounce search input
+    useEffect(() => {
+        const handler = setTimeout(() => {
+            setDebouncedSearch(search);
+        }, 300);
+        return () => clearTimeout(handler);
+    }, [search]);
+
+    // Fetch students on filter changes
+    useEffect(() => {
+        let isMounted = true;
+        const fetchStudents = async () => {
+            setLoadingStudents(true);
+            try {
+                const res = await api.get(`/principal/departments/${dept.id}/students`, {
+                    params: { year, section, sortBy, search: debouncedSearch }
+                });
+                if (isMounted) {
+                    setStudentsData(res.data);
+                }
+            } catch (err) {
+                console.error(err);
+            } finally {
+                if (isMounted) {
+                    setLoadingStudents(false);
+                }
+            }
+        };
+        fetchStudents();
+        return () => { isMounted = false; };
+    }, [dept.id, year, section, sortBy, debouncedSearch]);
+
+    // Auto-expand search results
+    useEffect(() => {
+        if (debouncedSearch.trim() && Object.keys(studentsData.data || {}).length > 0) {
+            setExpandedYears(prev => {
+                const next = { ...prev };
+                Object.keys(studentsData.data).forEach(y => {
+                    next[y] = true;
+                });
+                return next;
+            });
+            setExpandedSections(prev => {
+                const next = { ...prev };
+                Object.entries(studentsData.data).forEach(([y, secs]) => {
+                    Object.keys(secs || {}).forEach(s => {
+                        next[`${y}-${s}`] = true;
+                    });
+                });
+                return next;
+            });
+        }
+    }, [debouncedSearch, studentsData.data]);
+
+    const toggleYear = (yearStr) => {
+        setExpandedYears(prev => ({ ...prev, [yearStr]: !prev[yearStr] }));
+    };
+
+    const toggleSection = (yearStr, secStr) => {
+        const key = `${yearStr}-${secStr}`;
+        setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }));
+    };
 
     const tabs = [
         { key: 'students', label: 'Students' },
@@ -15,11 +99,139 @@ function DeptTabs({ dept, students, faculty }) {
         { key: 'alerts', label: 'Alerts' },
     ];
 
-    const defaulters = (students || []).filter(s => s.att != null && s.att < 75);
-    const hasBacklogs = (students || []).filter(s => s.backlogs > 0);
+    const defaulters = (allStudents || []).filter(s => s.att != null && s.att < 75);
+    const hasBacklogs = (allStudents || []).filter(s => s.backlogs > 0);
+
+    const summary = studentsData.summary || { students: 0, avgAttendance: 0, avgCGPA: 0, backlogs: 0 };
+    const groupedData = studentsData.data || {};
 
     return (
         <div style={{ padding: '0 0 4px 0' }}>
+            <style>{`
+                .principal-filters-bar {
+                    display: flex;
+                    gap: 10px;
+                    margin-bottom: 16px;
+                    flex-wrap: wrap;
+                }
+                .principal-filter-input {
+                    padding: 8px 12px;
+                    font-size: 0.8rem;
+                    border: 1px solid var(--border);
+                    border-radius: 8px;
+                    background: var(--bg-card);
+                    color: var(--text-primary);
+                    outline: none;
+                }
+                .principal-filter-input:focus {
+                    border-color: #1A3C6E;
+                }
+                .p-summary-stats-bar {
+                    display: grid;
+                    grid-template-columns: repeat(4, 1fr);
+                    gap: 10px;
+                    background: rgba(26,60,110,0.04);
+                    border: 1px solid rgba(26,60,110,0.1);
+                    border-radius: 10px;
+                    padding: 12px;
+                    margin-bottom: 16px;
+                }
+                .p-stat-item {
+                    text-align: center;
+                }
+                .p-stat-val {
+                    font-size: 1.15rem;
+                    font-weight: 800;
+                    color: #1A3C6E;
+                    margin: 0;
+                }
+                .p-stat-lbl {
+                    font-size: 0.65rem;
+                    font-weight: 600;
+                    color: var(--text-tertiary);
+                    text-transform: uppercase;
+                    margin-top: 2px;
+                    margin: 0;
+                }
+                .p-year-accordion {
+                    border: 1px solid var(--border);
+                    border-radius: 10px;
+                    margin-bottom: 10px;
+                    background: var(--bg-card);
+                    overflow: hidden;
+                }
+                .p-year-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 10px 16px;
+                    background: var(--bg-secondary);
+                    cursor: pointer;
+                    user-select: none;
+                    font-weight: 700;
+                    font-size: 0.88rem;
+                    color: var(--text-primary);
+                }
+                .p-year-body {
+                    padding: 12px;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+                .p-section-accordion {
+                    border: 1px solid var(--border);
+                    border-radius: 8px;
+                    overflow: hidden;
+                }
+                .p-section-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 8px 14px;
+                    background: rgba(0,0,0,0.02);
+                    cursor: pointer;
+                    user-select: none;
+                    font-weight: 600;
+                    font-size: 0.82rem;
+                    color: var(--text-secondary);
+                }
+                .p-section-body {
+                    border-top: 1px solid var(--border);
+                }
+                .p-highlight-row {
+                    background: rgba(37,99,235,0.06) !important;
+                }
+                .p-status-badge {
+                    font-size: 0.68rem;
+                    font-weight: 700;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                }
+                .p-status-badge.active {
+                    background: rgba(22,163,74,0.1);
+                    color: #16A34A;
+                }
+                .p-status-badge.inactive {
+                    background: rgba(220,38,38,0.1);
+                    color: #DC2626;
+                }
+                .p-quick-view-btn {
+                    padding: 3px 8px;
+                    font-size: 0.72rem;
+                    font-weight: 600;
+                    background: transparent;
+                    border: 1px solid #1A3C6E;
+                    color: #1A3C6E;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    transition: all 0.15s;
+                }
+                .p-quick-view-btn:hover {
+                    background: #1A3C6E;
+                    color: white;
+                }
+            `}</style>
+
             {/* Tab bar */}
             <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', paddingLeft: 20 }}>
                 {tabs.map(t => (
@@ -42,39 +254,181 @@ function DeptTabs({ dept, students, faculty }) {
             </div>
 
             {/* Tab content */}
-            <div style={{ padding: '16px 20px', maxHeight: 340, overflowY: 'auto' }}>
+            <div style={{ padding: '16px 20px', maxHeight: 420, overflowY: 'auto' }}>
 
-                {/* Students tab — real data */}
+                {/* Students tab — restructured year-wise collapsible hierarchy */}
                 {tab === 'students' && (
-                    <table className="data-table" style={{ margin: 0 }}>
-                        <thead><tr><th>#</th><th>Name / Roll</th><th>CGPA</th><th>Attendance</th><th>Backlogs</th></tr></thead>
-                        <tbody>
-                            {(students || []).sort((a, b) => (b.cgpa || 0) - (a.cgpa || 0)).map((s, i) => (
-                                <tr key={s.id}>
-                                    <td style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>#{i + 1}</td>
-                                    <td>
-                                        <div style={{ fontWeight: 600, fontSize: '0.83rem' }}>{s.full_name}</div>
-                                        <div style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>{s.roll_number}</div>
-                                    </td>
-                                    <td>
-                                        {s.cgpa != null
-                                            ? <span style={{ fontWeight: 800, color: s.cgpa >= 8 ? '#16A34A' : s.cgpa >= 6 ? '#D97706' : '#DC2626' }}>{Number(s.cgpa).toFixed(2)}</span>
-                                            : <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
-                                    </td>
-                                    <td>
-                                        {s.att != null
-                                            ? <span style={{ fontWeight: 700, color: s.att >= 75 ? '#16A34A' : '#DC2626' }}>{s.att}%</span>
-                                            : <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
-                                    </td>
-                                    <td>{s.backlogs > 0
-                                        ? <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: '0.7rem', fontWeight: 700, background: 'rgba(220,38,38,0.1)', color: '#DC2626' }}>⚠ {s.backlogs}</span>
-                                        : <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>—</span>}
-                                    </td>
-                                </tr>
-                            ))}
-                            {(!students || students.length === 0) && <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: 20 }}>No students</td></tr>}
-                        </tbody>
-                    </table>
+                    <div>
+                        {/* Filters Bar */}
+                        <div className="principal-filters-bar">
+                            <input
+                                className="principal-filter-input"
+                                style={{ flex: 1, minWidth: '160px' }}
+                                placeholder="🔍 Search name, roll..."
+                                value={search}
+                                onChange={e => setSearch(e.target.value)}
+                            />
+                            <select
+                                className="principal-filter-input"
+                                value={year}
+                                onChange={e => setYear(e.target.value)}
+                            >
+                                <option value="all">All Years</option>
+                                <option value="1">1st Year</option>
+                                <option value="2">2nd Year</option>
+                                <option value="3">3rd Year</option>
+                                <option value="4">4th Year</option>
+                            </select>
+                            <select
+                                className="principal-filter-input"
+                                value={section}
+                                onChange={e => setSection(e.target.value)}
+                            >
+                                <option value="all">All Sections</option>
+                                <option value="A">Section A</option>
+                                <option value="B">Section B</option>
+                                <option value="C">Section C</option>
+                                <option value="D">Section D</option>
+                            </select>
+                            <select
+                                className="principal-filter-input"
+                                value={sortBy}
+                                onChange={e => setSortBy(e.target.value)}
+                            >
+                                <option value="cgpa">Sort by CGPA</option>
+                                <option value="attendance">Sort by Attendance</option>
+                                <option value="leastBacklogs">Sort by Least Backlogs</option>
+                                <option value="highestBacklogs">Sort by Highest Backlogs</option>
+                                <option value="alphabetical">Sort Alphabetical</option>
+                            </select>
+                        </div>
+
+                        {/* Dynamic Summary Stats Bar */}
+                        <div className="p-summary-stats-bar">
+                            <div className="p-stat-item">
+                                <p className="p-stat-val">{summary.students || 0}</p>
+                                <p className="p-stat-lbl">Students</p>
+                            </div>
+                            <div className="p-stat-item">
+                                <p className="p-stat-val" style={{ color: (summary.avgAttendance || 0) >= 75 ? '#16A34A' : '#DC2626' }}>
+                                    {summary.avgAttendance || 0}%
+                                </p>
+                                <p className="p-stat-lbl">Avg Attend.</p>
+                            </div>
+                            <div className="p-stat-item">
+                                <p className="p-stat-val" style={{ color: (summary.avgCGPA || 0) >= 7 ? '#16A34A' : '#D97706' }}>
+                                    {Number(summary.avgCGPA || 0).toFixed(2)}
+                                </p>
+                                <p className="p-stat-lbl">Avg CGPA</p>
+                            </div>
+                            <div className="p-stat-item">
+                                <p className="p-stat-val" style={{ color: (summary.backlogs || 0) > 0 ? '#DC2626' : 'var(--text-tertiary)' }}>
+                                    {summary.backlogs || 0}
+                                </p>
+                                <p className="p-stat-lbl">Backlogs</p>
+                            </div>
+                        </div>
+
+                        {/* Loading / Results display */}
+                        {loadingStudents ? (
+                            <div style={{ display: 'flex', justifyContent: 'center', padding: '30px 0' }}><LoadingSpinner /></div>
+                        ) : Object.keys(groupedData).length === 0 ? (
+                            <div style={{ textAlign: 'center', color: 'var(--text-tertiary)', padding: 30, fontSize: '0.85rem' }}>No students found matching filters</div>
+                        ) : (
+                            ['1st Year', '2nd Year', '3rd Year', '4th Year'].map(yearStr => {
+                                const sections = groupedData[yearStr] || {};
+                                if (Object.keys(sections).length === 0) return null;
+
+                                const isYearOpen = expandedYears[yearStr];
+
+                                return (
+                                    <div key={yearStr} className="p-year-accordion">
+                                        <div className="p-year-header" onClick={() => toggleYear(yearStr)}>
+                                            <span>{yearStr}</span>
+                                            <span style={{ fontSize: '0.75rem', transform: isYearOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▼</span>
+                                        </div>
+
+                                        {isYearOpen && (
+                                            <div className="p-year-body">
+                                                {Object.entries(sections).map(([secStr, list]) => {
+                                                    const isSecOpen = expandedSections[`${yearStr}-${secStr}`];
+
+                                                    return (
+                                                        <div key={secStr} className="p-section-accordion">
+                                                            <div className="p-section-header" onClick={() => toggleSection(yearStr, secStr)}>
+                                                                <span>{secStr}</span>
+                                                                <span style={{ fontSize: '0.7rem', transform: isSecOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>▼</span>
+                                                            </div>
+
+                                                            {isSecOpen && (
+                                                                <div className="p-section-body">
+                                                                    <table className="data-table" style={{ margin: 0, border: 'none' }}>
+                                                                        <thead>
+                                                                            <tr>
+                                                                                <th>Rank</th>
+                                                                                <th>Name / Roll</th>
+                                                                                <th>CGPA</th>
+                                                                                <th>Attendance</th>
+                                                                                <th>Backlogs</th>
+                                                                                <th>Status</th>
+                                                                                <th style={{ textAlign: 'right', paddingRight: 14 }}>Actions</th>
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody>
+                                                                            {list.map(s => {
+                                                                                const q = debouncedSearch.trim().toLowerCase();
+                                                                                const isMatch = q && (
+                                                                                    (s.full_name || '').toLowerCase().includes(q) ||
+                                                                                    (s.roll_number || '').toLowerCase().includes(q)
+                                                                                );
+
+                                                                                return (
+                                                                                    <tr key={s.id} className={isMatch ? 'p-highlight-row' : ''}>
+                                                                                        <td style={{ color: 'var(--text-tertiary)', fontWeight: 600 }}>#{s.rank}</td>
+                                                                                        <td>
+                                                                                            <div style={{ fontWeight: 600, fontSize: '0.83rem' }}>{s.full_name}</div>
+                                                                                            <div style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>{s.roll_number}</div>
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            {s.cgpa != null
+                                                                                                ? <span style={{ fontWeight: 800, color: s.cgpa >= 8 ? '#16A34A' : s.cgpa >= 6 ? '#D97706' : '#DC2626' }}>{Number(s.cgpa).toFixed(2)}</span>
+                                                                                                : <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            {s.att != null
+                                                                                                ? <span style={{ fontWeight: 700, color: s.att >= 75 ? '#16A34A' : '#DC2626' }}>{s.att}%</span>
+                                                                                                : <span style={{ color: 'var(--text-tertiary)' }}>—</span>}
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            {s.backlogs > 0
+                                                                                                ? <span style={{ padding: '2px 8px', borderRadius: 6, fontSize: '0.7rem', fontWeight: 700, background: 'rgba(220,38,38,0.1)', color: '#DC2626' }}>⚠ {s.backlogs}</span>
+                                                                                                : <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>—</span>}
+                                                                                        </td>
+                                                                                        <td>
+                                                                                            <span className={`p-status-badge ${s.status === 'Active' ? 'active' : 'inactive'}`}>
+                                                                                                {s.status}
+                                                                                            </span>
+                                                                                        </td>
+                                                                                        <td style={{ textAlign: 'right', paddingRight: 14 }}>
+                                                                                            <button onClick={() => setViewStudent(s)} className="p-quick-view-btn">Quick View</button>
+                                                                                        </td>
+                                                                                    </tr>
+                                                                                );
+                                                                            })}
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })
+                        )}
+                    </div>
                 )}
 
                 {/* Faculty tab — real data */}
@@ -113,6 +467,63 @@ function DeptTabs({ dept, students, faculty }) {
                     </div>
                 )}
             </div>
+
+            {/* Quick View Student Modal */}
+            <Modal isOpen={!!viewStudent} onClose={() => setViewStudent(null)} title="Student Academic Profile" size="sm">
+                {viewStudent && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                        <div style={{ borderBottom: '1px solid var(--border)', paddingBottom: 10 }}>
+                            <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: '#1A3C6E' }}>{viewStudent.full_name}</h3>
+                            <p style={{ margin: '4px 0 0 0', fontFamily: 'monospace', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Roll No: {viewStudent.roll_number}</p>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 20px', fontSize: '0.82rem' }}>
+                            <div>
+                                <span style={{ color: 'var(--text-tertiary)', fontWeight: 600, display: 'block' }}>Email Address</span>
+                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{viewStudent.email || '—'}</span>
+                            </div>
+                            <div>
+                                <span style={{ color: 'var(--text-tertiary)', fontWeight: 600, display: 'block' }}>Department</span>
+                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{dept.code}</span>
+                            </div>
+                            <div>
+                                <span style={{ color: 'var(--text-tertiary)', fontWeight: 600, display: 'block' }}>Academic Year</span>
+                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Year {viewStudent.year} (Sem {viewStudent.semester})</span>
+                            </div>
+                            <div>
+                                <span style={{ color: 'var(--text-tertiary)', fontWeight: 600, display: 'block' }}>Section</span>
+                                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Section {viewStudent.section || 'A'}</span>
+                            </div>
+                            <div>
+                                <span style={{ color: 'var(--text-tertiary)', fontWeight: 600, display: 'block' }}>CGPA</span>
+                                <span style={{ fontWeight: 700, color: (viewStudent.cgpa || 0) >= 8 ? '#16A34A' : '#D97706' }}>
+                                    {viewStudent.cgpa != null ? Number(viewStudent.cgpa).toFixed(2) : '—'}
+                                </span>
+                            </div>
+                            <div>
+                                <span style={{ color: 'var(--text-tertiary)', fontWeight: 600, display: 'block' }}>Attendance</span>
+                                <span style={{ fontWeight: 700, color: (viewStudent.att || 0) >= 75 ? '#16A34A' : '#DC2626' }}>
+                                    {viewStudent.att != null ? `${viewStudent.att}%` : '—'}
+                                </span>
+                            </div>
+                            <div>
+                                <span style={{ color: 'var(--text-tertiary)', fontWeight: 600, display: 'block' }}>Backlogs</span>
+                                <span style={{ fontWeight: 700, color: viewStudent.backlogs > 0 ? '#DC2626' : 'var(--text-secondary)' }}>
+                                    {viewStudent.backlogs > 0 ? `⚠ ${viewStudent.backlogs} Active` : 'None'}
+                                </span>
+                            </div>
+                            <div>
+                                <span style={{ color: 'var(--text-tertiary)', fontWeight: 600, display: 'block' }}>Account Status</span>
+                                <span className={`p-status-badge ${viewStudent.status === 'Active' ? 'active' : 'inactive'}`} style={{ display: 'inline-block', marginTop: 3 }}>
+                                    {viewStudent.status}
+                                </span>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 6 }}>
+                            <button onClick={() => setViewStudent(null)} className="btn btn-outline" style={{ padding: '6px 16px', fontSize: '0.82rem' }}>Close</button>
+                        </div>
+                    </div>
+                )}
+            </Modal>
         </div>
     );
 }

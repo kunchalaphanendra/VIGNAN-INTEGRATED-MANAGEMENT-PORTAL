@@ -750,15 +750,27 @@ router.post('/attendance', async (req, res) => {
         // Check for recent alerts (avoid duplicates within 24h)
         for (const st of attStats) {
             const [recent] = await db.query(
-                "SELECT id FROM notifications WHERE user_id=? AND type='alert' AND reference_id=? AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)",
+                "SELECT id FROM notifications WHERE recipient_id=? AND (type='alert' OR type='warning') AND reference_id=? AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)",
                 [st.student_id, assignment_id]
             );
             if (recent.length === 0) {
                 // In-portal notification
+                /*
                 await db.query(
                     'INSERT INTO notifications (user_id, title, message, type, reference_id) VALUES (?,?,?,?,?)',
                     [st.student_id, 'Attendance Warning', `Your attendance in ${subjectName} is ${st.pct}%`, 'alert', assignment_id]
                 );
+                */
+                const { sendNotification } = require('../utils/notificationService');
+                await sendNotification({
+                    recipient_id: st.student_id,
+                    title: 'Attendance Warning',
+                    message: `Your attendance in ${subjectName} is ${st.pct}%`,
+                    type: 'warning',
+                    sender_role: req.user.role,
+                    sender_id: req.user.id,
+                    target_url: `/student/attendance`
+                });
                 // Email
                 if (st.email) {
                     const emailData = attendanceWarningEmail(st.full_name, subjectName, st.pct, st.attended, st.total);
@@ -927,6 +939,9 @@ router.post('/marks', async (req, res) => {
         await ensureMarksTable();
 
         const ayId = academic_year_id || 1;
+        const [subRows] = await db.query('SELECT name, code FROM subjects WHERE id = ?', [subject_id]);
+        const subjectName = subRows[0]?.name || 'a subject';
+        const { sendNotification } = require('../utils/notificationService');
         for (const e of entries) {
             await db.query(
                 `INSERT INTO marks
@@ -939,6 +954,19 @@ router.post('/marks', async (req, res) => {
                    is_published   = 1`,
                 [e.student_id, subject_id, ayId, semester, exam_type, exam_label, e.marks_obtained, e.max_marks, req.user.id]
             );
+            try {
+                await sendNotification({
+                    recipient_id: e.student_id,
+                    title: 'Marks Entered/Updated',
+                    message: `Your marks for "${subjectName}" - ${exam_label} (${exam_type}) have been updated.`,
+                    type: 'marks',
+                    sender_role: req.user.role,
+                    sender_id: req.user.id,
+                    target_url: `/student/marks`
+                });
+            } catch (notifErr) {
+                console.error('Individual mark notification failed:', notifErr);
+            }
         }
         res.status(201).json({ message: `${entries.length} marks entries saved` });
     } catch (err) {
@@ -998,6 +1026,22 @@ router.put('/marks/:id', async (req, res) => {
             'UPDATE marks SET marks_obtained=?, max_marks=COALESCE(?,max_marks) WHERE id=?',
             [marks_obtained, max_marks ?? null, req.params.id]
         );
+        try {
+            const [subRows] = await db.query('SELECT name FROM subjects WHERE id = ?', [mark[0].subject_id]);
+            const subjectName = subRows[0]?.name || 'a subject';
+            const { sendNotification } = require('../utils/notificationService');
+            await sendNotification({
+                recipient_id: mark[0].student_id,
+                title: 'Marks Entered/Updated',
+                message: `Your marks for "${subjectName}" - ${mark[0].exam_label} (${mark[0].exam_type}) have been updated.`,
+                type: 'marks',
+                sender_role: req.user.role,
+                sender_id: req.user.id,
+                target_url: `/student/marks`
+            });
+        } catch (notifErr) {
+            console.error('Mark update notification failed:', notifErr);
+        }
         res.json({ message: 'Mark updated' });
     } catch (err) {
         res.status(500).json({ error: 'Server error' });
@@ -1368,10 +1412,11 @@ router.get('/cgpa/:assignmentId', async (req, res) => {
 router.get('/student-leaves', async (req, res) => {
     try {
         const [rows] = await db.query(`
-      SELECT sl.*, u.full_name, sp.roll_number
+      SELECT sl.*, u.full_name, sp.roll_number, sp.year, sp.section, d.code as dept_code
       FROM student_leaves sl
       JOIN users u ON sl.student_id = u.id
       JOIN student_profiles sp ON sp.user_id = u.id
+      JOIN departments d ON sp.department_id = d.id
       WHERE sl.faculty_id = ?
       ORDER BY sl.created_at DESC
     `, [req.user.id]);
@@ -1412,11 +1457,23 @@ router.patch('/student-leaves/:id', async (req, res) => {
         }
 
         // Notify student
+        /*
         await db.query(
             'INSERT INTO notifications (user_id, title, message, type, reference_id) VALUES (?,?,?,?,?)',
             [leave[0].student_id, `Leave ${status}`, `Your leave request has been ${status}. ${remarks || ''}`, 'leave', req.params.id]
         );
 
+        */
+        const { sendNotification } = require('../utils/notificationService');
+        await sendNotification({
+            recipient_id: leave[0].student_id,
+            title: `Leave ${status}`,
+            message: `Your leave request has been ${status}. ${remarks || ''}`,
+            type: 'leave',
+            sender_role: req.user.role,
+            sender_id: req.user.id,
+            target_url: `/student/leaves`
+        });
         res.json({ message: `Leave ${status}` });
     } catch (err) {
         console.error('Student leave approval error:', err);
@@ -1444,11 +1501,23 @@ router.post('/faculty-leaves', async (req, res) => {
         );
 
         // Notify HOD
+        /*
         await db.query(
             'INSERT INTO notifications (user_id, title, message, type, reference_id) VALUES (?,?,?,?,?)',
             [hod[0].id, 'New Leave Request', `${req.user.full_name} has requested leave from ${from_date} to ${to_date}`, 'leave', result.insertId]
         );
 
+        */
+        const { sendNotification } = require('../utils/notificationService');
+        await sendNotification({
+            recipient_id: hod[0].id,
+            title: 'New Leave Request',
+            message: `${req.user.full_name} has requested leave from ${from_date} to ${to_date}`,
+            type: 'leave',
+            sender_role: req.user.role,
+            sender_id: req.user.id,
+            target_url: `/hod/faculty-leaves`
+        });
         res.status(201).json({ message: 'Leave request submitted', id: result.insertId });
     } catch (err) {
         res.status(500).json({ error: 'Server error' });
@@ -1537,6 +1606,23 @@ router.patch('/projects/:id/verify', async (req, res) => {
             'UPDATE student_projects SET is_verified=TRUE, status="verified", verified_by=? WHERE id=?',
             [req.user.id, req.params.id]
         );
+        try {
+            const [proj] = await db.query('SELECT student_id, title FROM student_projects WHERE id = ?', [req.params.id]);
+            if (proj.length > 0) {
+                const { sendNotification } = require('../utils/notificationService');
+                await sendNotification({
+                    recipient_id: proj[0].student_id,
+                    title: 'Project Verified',
+                    message: `Your project "${proj[0].title}" has been verified by the faculty.`,
+                    type: 'academic',
+                    sender_role: req.user.role,
+                    sender_id: req.user.id,
+                    target_url: `/student/projects`
+                });
+            }
+        } catch (e) {
+            console.error('Notify project verify error:', e);
+        }
         res.json({ message: 'Project verified' });
     } catch (err) {
         res.status(500).json({ error: 'Server error' });
@@ -1550,6 +1636,23 @@ router.patch('/projects/:id/unverify', async (req, res) => {
             'UPDATE student_projects SET is_verified=FALSE, status="pending", verified_by=NULL WHERE id=?',
             [req.params.id]
         );
+        try {
+            const [proj] = await db.query('SELECT student_id, title FROM student_projects WHERE id = ?', [req.params.id]);
+            if (proj.length > 0) {
+                const { sendNotification } = require('../utils/notificationService');
+                await sendNotification({
+                    recipient_id: proj[0].student_id,
+                    title: 'Project Status Updated',
+                    message: `Your project "${proj[0].title}" status has been reset to pending.`,
+                    type: 'academic',
+                    sender_role: req.user.role,
+                    sender_id: req.user.id,
+                    target_url: `/student/projects`
+                });
+            }
+        } catch (e) {
+            console.error('Notify project unverify error:', e);
+        }
         res.json({ message: 'Project unverified' });
     } catch (err) {
         res.status(500).json({ error: 'Server error' });
@@ -1564,6 +1667,23 @@ router.patch('/projects/:id/reject', async (req, res) => {
             'UPDATE student_projects SET is_verified=FALSE, status="rejected", rejection_reason=? WHERE id=?',
             [reason || null, req.params.id]
         );
+        try {
+            const [proj] = await db.query('SELECT student_id, title FROM student_projects WHERE id = ?', [req.params.id]);
+            if (proj.length > 0) {
+                const { sendNotification } = require('../utils/notificationService');
+                await sendNotification({
+                    recipient_id: proj[0].student_id,
+                    title: 'Project Rejected',
+                    message: `Your project "${proj[0].title}" has been rejected. Reason: ${reason || 'None specified'}.`,
+                    type: 'academic',
+                    sender_role: req.user.role,
+                    sender_id: req.user.id,
+                    target_url: `/student/projects`
+                });
+            }
+        } catch (e) {
+            console.error('Notify project reject error:', e);
+        }
         res.json({ message: 'Project rejected' });
     } catch (err) {
         res.status(500).json({ error: 'Server error' });
@@ -1902,14 +2022,26 @@ router.post('/sessions/:sessionId/attendance', async (req, res) => {
                     const subjectName = subj.length ? subj[0].name : 'a subject';
 
                     const [recent] = await db.query(
-                        "SELECT id FROM notifications WHERE user_id = ? AND type = 'alert' AND reference_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)",
+                        "SELECT id FROM notifications WHERE recipient_id = ? AND (type = 'alert' OR type = 'warning') AND reference_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)",
                         [studentId, session.assignment_id]
                     );
                     if (!recent.length) {
+                        /*
                         await db.query(
                             'INSERT INTO notifications (user_id, title, message, type, reference_id) VALUES (?, ?, ?, ?, ?)',
                             [studentId, 'Attendance Warning', `Your attendance in ${subjectName} is ${pct}%`, 'alert', session.assignment_id]
                         );
+                        */
+                        const { sendNotification } = require('../utils/notificationService');
+                        await sendNotification({
+                            recipient_id: studentId,
+                            title: 'Attendance Warning',
+                            message: `Your attendance in ${subjectName} is ${pct}%`,
+                            type: 'warning',
+                            sender_role: req.user.role,
+                            sender_id: req.user.id,
+                            target_url: `/student/attendance`
+                        });
                     }
                 }
             }

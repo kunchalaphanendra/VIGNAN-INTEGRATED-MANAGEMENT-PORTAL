@@ -40,7 +40,7 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' })
                 display: 'flex',
                 alignItems: 'flex-start',
                 justifyContent: 'center',
-                padding: '48px 16px 40px',
+                padding: 'clamp(12px, 5vh, 48px) 12px 24px',
                 overflowY: 'auto',
                 backgroundColor: 'var(--overlay)',
                 backdropFilter: 'blur(8px)',
@@ -71,7 +71,9 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' })
                     background: 'var(--bg-card)',
                     border: '1px solid var(--border)',
                     boxShadow: '0 32px 80px rgba(0,0,0,0.28), 0 8px 24px rgba(0,0,0,0.14)',
-                    marginBottom: 40,
+                    marginBottom: 24,
+                    display: 'flex',
+                    flexDirection: 'column',
                 }}
             >
                 {/* Header */}

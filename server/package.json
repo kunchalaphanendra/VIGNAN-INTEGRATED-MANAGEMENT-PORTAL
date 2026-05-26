@@ -20,8 +20,10 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "mysql2": "^3.19.1",
-    "nodemailer": "^8.0.2",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.7",
     "pdfkit": "^0.17.2",
+    "socket.io": "^4.8.3",
     "twilio": "^5.12.2",
     "uuid": "^13.0.0"
   }

@@ -573,6 +573,23 @@ router.patch('/complaints/:id/status', async (req, res) => {
             'UPDATE complaints SET status = ?, admin_notes = ?, updated_at = NOW() WHERE id = ?',
             [status, admin_notes || null, req.params.id]
         );
+        try {
+            const [compl] = await db.query('SELECT student_id, complaint_ref, is_anonymous FROM complaints WHERE id = ?', [req.params.id]);
+            if (compl.length > 0 && compl[0].student_id && !compl[0].is_anonymous) {
+                const { sendNotification } = require('../utils/notificationService');
+                await sendNotification({
+                    recipient_id: compl[0].student_id,
+                    title: 'Complaint Status Update',
+                    message: `Your complaint (${compl[0].complaint_ref}) status has been updated to "${status}".`,
+                    type: 'complaint',
+                    sender_role: req.user.role,
+                    sender_id: req.user.id,
+                    target_url: `/student/complaints`
+                });
+            }
+        } catch (notifErr) {
+            console.error('Complaint status update notification failed:', notifErr);
+        }
         res.json({ message: 'Complaint status updated' });
     } catch (err) {
         console.error('Update complaint status error:', err);
@@ -737,6 +754,20 @@ router.post('/placements', async (req, res) => {
                 req.user.id,
             ]
         );
+        try {
+            const { sendNotification } = require('../utils/notificationService');
+            await sendNotification({
+                recipient_role: 'student',
+                title: 'New Placement Opportunity',
+                message: `New job opening at ${company} for role "${role}".`,
+                type: 'placement',
+                sender_role: req.user.role,
+                sender_id: req.user.id,
+                target_url: `/student/placements`
+            });
+        } catch (notifErr) {
+            console.error('Placement notification failed:', notifErr);
+        }
         res.status(201).json({ message: 'Job posted', id: result.insertId });
     } catch (err) {
         console.error('Create placement error:', err);
@@ -803,10 +834,15 @@ router.delete('/placements/:id', async (req, res) => {
 
 // ─── DEPARTMENT DETAIL ENDPOINTS (for expandable dept cards) ─────────────────
 
-// GET /api/principal/departments/:id/students — enriched with real CGPA + attendance + backlogs
+// GET /api/principal/departments/:id/students — enriched with filters, sorting and dynamic stats
 router.get('/departments/:id/students', async (req, res) => {
     try {
         const deptId = req.params.id;
+        const { year, section, sortBy, search } = req.query;
+
+        // Get department code first
+        const [deptRows] = await db.query('SELECT code FROM departments WHERE id = ?', [deptId]);
+        const deptCode = deptRows.length > 0 ? deptRows[0].code : '';
 
         // Base student list
         const [rows] = await db.query(`
@@ -818,7 +854,14 @@ router.get('/departments/:id/students', async (req, res) => {
             ORDER BY sp.roll_number
         `, [deptId]);
 
-        if (rows.length === 0) return res.json({ students: [] });
+        if (rows.length === 0) {
+            return res.json({
+                department: deptCode,
+                summary: { students: 0, avgAttendance: 0, avgCGPA: 0, backlogs: 0 },
+                data: {},
+                students: []
+            });
+        }
 
         // Real attendance per student (total attended / total classes)
         const [attRows] = await db.query(`
@@ -855,16 +898,103 @@ router.get('/departments/:id/students', async (req, res) => {
             blRows.forEach(r => { backlogMap[r.student_id] = Number(r.cnt) || 0; });
         } catch (_) {}
 
-        const students = rows.map(s => ({
+        // Map and enrich students
+        let students = rows.map(s => ({
             ...s,
             cgpa:     cgpaMap[s.id]     != null ? cgpaMap[s.id]     : null,
             att:      attMap[s.id]      != null ? attMap[s.id]      : null,
             backlogs: backlogMap[s.id]  || 0,
+            status:   s.is_active ? 'Active' : 'Inactive'
         }));
 
-        res.json({ students });
+        // Apply filters: Year
+        if (year && year !== 'all') {
+            students = students.filter(s => String(s.year) === String(year));
+        }
+
+        // Apply filters: Section
+        if (section && section !== 'all') {
+            students = students.filter(s => String(s.section).toLowerCase() === String(section).toLowerCase());
+        }
+
+        // Apply filters: Search (name or roll number)
+        if (search && search.trim() !== '') {
+            const q = search.trim().toLowerCase();
+            students = students.filter(s =>
+                (s.full_name || '').toLowerCase().includes(q) ||
+                (s.roll_number || '').toLowerCase().includes(q)
+            );
+        }
+
+        // Calculate dynamic summary stats on the filtered dataset
+        const totalCount = students.length;
+        
+        const studentsWithAtt = students.filter(s => s.att != null);
+        const avgAttendance = studentsWithAtt.length > 0
+            ? Math.round(studentsWithAtt.reduce((acc, s) => acc + s.att, 0) / studentsWithAtt.length)
+            : 0;
+
+        const studentsWithCgpa = students.filter(s => s.cgpa != null);
+        const avgCGPA = studentsWithCgpa.length > 0
+            ? Number((studentsWithCgpa.reduce((acc, s) => acc + s.cgpa, 0) / studentsWithCgpa.length).toFixed(2))
+            : 0.0;
+
+        const totalBacklogs = students.reduce((acc, s) => acc + (s.backlogs || 0), 0);
+
+        // Apply sorting
+        if (sortBy) {
+            if (sortBy === 'cgpa') {
+                students.sort((a, b) => (b.cgpa || 0) - (a.cgpa || 0));
+            } else if (sortBy === 'attendance') {
+                students.sort((a, b) => (b.att || 0) - (a.att || 0));
+            } else if (sortBy === 'leastBacklogs' || sortBy === 'least_backlogs') {
+                students.sort((a, b) => (a.backlogs || 0) - (b.backlogs || 0));
+            } else if (sortBy === 'highestBacklogs' || sortBy === 'highest_backlogs') {
+                students.sort((a, b) => (b.backlogs || 0) - (a.backlogs || 0));
+            } else if (sortBy === 'alphabetical') {
+                students.sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
+            }
+        } else {
+            // Default to CGPA rank as in the example
+            students.sort((a, b) => (b.cgpa || 0) - (a.cgpa || 0));
+        }
+
+        // Map Rank attribute after sorting
+        students = students.map((s, index) => ({
+            ...s,
+            rank: index + 1
+        }));
+
+        // Group students: Year -> Section
+        const grouped = {};
+        const YEAR_LABELS = { 1: '1st Year', 2: '2nd Year', 3: '3rd Year', 4: '4th Year' };
+        
+        students.forEach(s => {
+            const yearStr = YEAR_LABELS[s.year] || `${s.year}th Year`;
+            const secStr = `Section ${s.section || 'A'}`;
+
+            if (!grouped[yearStr]) {
+                grouped[yearStr] = {};
+            }
+            if (!grouped[yearStr][secStr]) {
+                grouped[yearStr][secStr] = [];
+            }
+            grouped[yearStr][secStr].push(s);
+        });
+
+        res.json({
+            department: deptCode,
+            summary: {
+                students: totalCount,
+                avgAttendance,
+                avgCGPA,
+                backlogs: totalBacklogs
+            },
+            data: grouped,
+            students // also return the flat list for backward compatibility
+        });
     } catch (err) {
-        console.error('Dept students error:', err);
+        console.error('GET department students error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -1063,7 +1193,7 @@ router.get('/students/:id/subjects', async (req, res) => {
 // ─── SYSTEM RESETS (DANGER ZONE) ──────────────────────────────────────────────
 
 // DELETE /api/principal/reset-attendance
-router.delete('/reset-attendance', async (req, res) => {
+router.delete('/reset-attendance', require('../middleware/confirmPassword'), async (req, res) => {
     try {
         const { confirmation } = req.body;
         if (confirmation !== 'RESET') {
@@ -1077,6 +1207,13 @@ router.delete('/reset-attendance', async (req, res) => {
         await db.query('TRUNCATE TABLE attendance_summary');
         await db.query('SET FOREIGN_KEY_CHECKS = 1');
         
+        try {
+            const { logAction } = require('../utils/auditLogger');
+            await logAction(req.user.id, 'RESET_ATTENDANCE', 'attendance', null, { principal_id: req.user.id });
+        } catch (auditErr) {
+            console.error('Failed to log reset attendance:', auditErr.message);
+        }
+
         res.json({ message: 'All attendance records have been permanently deleted.' });
     } catch (err) {
         console.error('Reset attendance error:', err);
@@ -1085,7 +1222,7 @@ router.delete('/reset-attendance', async (req, res) => {
 });
 
 // DELETE /api/principal/reset-academics
-router.delete('/reset-academics', async (req, res) => {
+router.delete('/reset-academics', require('../middleware/confirmPassword'), async (req, res) => {
     try {
         const { confirmation } = req.body;
         if (confirmation !== 'RESET') {
@@ -1100,6 +1237,13 @@ router.delete('/reset-academics', async (req, res) => {
         await db.query('TRUNCATE TABLE student_leaves');
         await db.query('SET FOREIGN_KEY_CHECKS = 1');
         
+        try {
+            const { logAction } = require('../utils/auditLogger');
+            await logAction(req.user.id, 'RESET_ACADEMICS', 'marks', null, { principal_id: req.user.id });
+        } catch (auditErr) {
+            console.error('Failed to log reset academics:', auditErr.message);
+        }
+
         res.json({ message: 'All student academics records (marks, grades, projects, leaves) have been permanently deleted.' });
     } catch (err) {
         console.error('Reset academics error:', err);

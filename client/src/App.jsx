@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { NotificationProvider } from './context/NotificationContext';
 
 // ── Eagerly loaded (always needed) ──────────────────────────────────────────
 import Landing from './pages/Landing';
@@ -40,6 +41,7 @@ const HodFeedbackPortal   = lazy(() => import('./pages/hod/FeedbackPortal'));
 const HodComplaints       = lazy(() => import('./pages/hod/Complaints'));
 const HodPromoteStudents  = lazy(() => import('./pages/hod/PromoteStudents'));
 const HodResetData        = lazy(() => import('./pages/hod/ResetData'));
+const HodBackup           = lazy(() => import('./pages/hod/Backup'));
 
 // Faculty
 const FacultyDashboard     = lazy(() => import('./pages/faculty/Dashboard'));
@@ -63,6 +65,7 @@ const StudentComplaints = lazy(() => import('./pages/student/Complaints'));
 const StudentTimetable  = lazy(() => import('./pages/student/Timetable'));
 const StudentPlacements = lazy(() => import('./pages/student/Placements'));
 const StudentFeedback   = lazy(() => import('./pages/student/Feedback'));
+const Notifications     = lazy(() => import('./pages/Notifications'));
 
 // ── Page spinner shown while lazy chunk loads ────────────────────────────────
 function PageLoader() {
@@ -104,6 +107,7 @@ function AppRoutes() {
         <Route path="/principal/calendar"   element={<ProtectedRoute roles={['principal']}><PrincipalCalendar role="principal" /></ProtectedRoute>} />
         <Route path="/principal/placements" element={<ProtectedRoute roles={['principal']}><PrincipalPlacements /></ProtectedRoute>} />
         <Route path="/principal/settings"   element={<ProtectedRoute roles={['principal']}><PrincipalSettings /></ProtectedRoute>} />
+        <Route path="/principal/notifications" element={<ProtectedRoute roles={['principal']}><Notifications /></ProtectedRoute>} />
 
         {/* HOD */}
         <Route path="/hod/dashboard"        element={<ProtectedRoute roles={['hod']}><HodDashboard /></ProtectedRoute>} />
@@ -126,6 +130,8 @@ function AppRoutes() {
         <Route path="/hod/complaints"       element={<ProtectedRoute roles={['hod']}><HodComplaints /></ProtectedRoute>} />
         <Route path="/hod/promote"          element={<ProtectedRoute roles={['hod']}><HodPromoteStudents /></ProtectedRoute>} />
         <Route path="/hod/reset-data"       element={<ProtectedRoute roles={['hod']}><HodResetData /></ProtectedRoute>} />
+        <Route path="/hod/backup"           element={<ProtectedRoute roles={['hod']}><HodBackup /></ProtectedRoute>} />
+        <Route path="/hod/notifications"    element={<ProtectedRoute roles={['hod']}><Notifications /></ProtectedRoute>} />
 
         {/* Faculty */}
         <Route path="/faculty/dashboard"     element={<ProtectedRoute roles={['faculty']}><FacultyDashboard /></ProtectedRoute>} />
@@ -139,6 +145,7 @@ function AppRoutes() {
         <Route path="/faculty/polls"         element={<ProtectedRoute roles={['faculty']}><FacultyPolls /></ProtectedRoute>} />
         <Route path="/faculty/calendar"      element={<ProtectedRoute roles={['faculty']}><PrincipalCalendar role="faculty" /></ProtectedRoute>} />
         <Route path="/faculty/placements"    element={<ProtectedRoute roles={['faculty']}><FacultyPlacements /></ProtectedRoute>} />
+        <Route path="/faculty/notifications" element={<ProtectedRoute roles={['faculty']}><Notifications /></ProtectedRoute>} />
 
         {/* Student */}
         <Route path="/student/dashboard"  element={<ProtectedRoute roles={['student']}><StudentDashboard /></ProtectedRoute>} />
@@ -153,6 +160,7 @@ function AppRoutes() {
         <Route path="/student/calendar"   element={<ProtectedRoute roles={['student']}><PrincipalCalendar role="student" /></ProtectedRoute>} />
         <Route path="/student/placements" element={<ProtectedRoute roles={['student']}><StudentPlacements /></ProtectedRoute>} />
         <Route path="/student/feedback"   element={<ProtectedRoute roles={['student']}><StudentFeedback /></ProtectedRoute>} />
+        <Route path="/student/notifications" element={<ProtectedRoute roles={['student']}><Notifications /></ProtectedRoute>} />
 
         {/* Catch-all */}
         <Route path="*" element={<Navigate to="/" replace />} />
@@ -166,7 +174,9 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <ThemeProvider>
-          <AppRoutes />
+          <NotificationProvider>
+            <AppRoutes />
+          </NotificationProvider>
         </ThemeProvider>
       </AuthProvider>
     </BrowserRouter>

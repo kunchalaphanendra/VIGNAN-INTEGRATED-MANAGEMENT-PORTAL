@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import DashboardLayout from '../../components/DashboardLayout';
-import LoadingSpinner from '../../components/LoadingSpinner';
+import { SkeletonGrid } from '../../components/SkeletonCard';
+import PrintButton from '../../components/PrintButton';
 import api from '../../utils/api';
 import {
     LineChart, Line, BarChart, Bar, XAxis, YAxis,
@@ -209,7 +210,12 @@ export default function StudentMarks() {
         setExpandedSubject(prev => prev === name ? null : name);
     };
 
-    if (loading) return <DashboardLayout><LoadingSpinner /></DashboardLayout>;
+    if (loading) return (
+        <DashboardLayout>
+            <div style={{ marginBottom: 20 }}><SkeletonGrid count={3} /></div>
+            <div style={{ marginBottom: 20 }}><SkeletonGrid count={3} /></div>
+        </DashboardLayout>
+    );
 
     return (
         <DashboardLayout>
@@ -222,6 +228,7 @@ export default function StudentMarks() {
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 3 }}>View your exam results, trends and subject-wise performance</p>
                 </div>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <PrintButton label="Download PDF" size="sm" />
                     {/* Search */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--bg-card)', border: '1.5px solid var(--border)', borderRadius: 10, padding: '8px 14px', minWidth: 200 }}>
                         <svg width="15" height="15" fill="none" stroke="var(--text-tertiary)" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></svg>

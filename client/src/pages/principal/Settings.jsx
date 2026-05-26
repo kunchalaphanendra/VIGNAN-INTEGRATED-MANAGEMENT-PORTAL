@@ -16,10 +16,12 @@ export default function PrincipalSettings() {
             return;
         }
         if (!window.confirm('WARNING: This will permanently delete ALL attendance records for ALL students. This action CANNOT be undone. Proceed?')) return;
+        const password = window.prompt('Please enter your administrator password to confirm:');
+        if (!password) return;
         
         setLoadingAtt(true); setMsg({ text: '', type: '' });
         try {
-            const res = await api.delete('/principal/reset-attendance', { data: { confirmation: attConfirm } });
+            const res = await api.delete('/principal/reset-attendance', { data: { confirmation: attConfirm, password } });
             setMsg({ text: res.data.message, type: 'success' });
             setAttConfirm('');
         } catch (e) {
@@ -35,10 +37,12 @@ export default function PrincipalSettings() {
             return;
         }
         if (!window.confirm('WARNING: This will permanently delete ALL academic records (marks, grades, projects) for ALL students. Profiles will remain. Proceed?')) return;
+        const password = window.prompt('Please enter your administrator password to confirm:');
+        if (!password) return;
         
         setLoadingAcad(true); setMsg({ text: '', type: '' });
         try {
-            const res = await api.delete('/principal/reset-academics', { data: { confirmation: acadConfirm } });
+            const res = await api.delete('/principal/reset-academics', { data: { confirmation: acadConfirm, password } });
             setMsg({ text: res.data.message, type: 'success' });
             setAcadConfirm('');
         } catch (e) {

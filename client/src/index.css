@@ -330,6 +330,28 @@ textarea.form-input {
   margin-top: 4px;
 }
 
+/* Flexible page header row (title + action button) */
+.page-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.page-header-row h1 {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+.page-header-row p {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
 /* ========== Badge ========== */
 .badge {
   display: inline-flex;
@@ -516,6 +538,8 @@ textarea.form-input {
 .hide-mobile  { }
 .show-mobile  { display: none !important; }
 .mobile-stack { }
+/* Full-width search on mobile */
+.mobile-search-full { }
 
 /* ═══════════════════════════════════════════════════════════════
    ██  ALL MOBILE OVERRIDES  (max-width: 767px)
@@ -523,8 +547,8 @@ textarea.form-input {
 @media (max-width: 767px) {
 
   /* ── Layout ── */
-  .dashboard-main  { padding-left: 0 !important; padding-bottom: 70px; }
-  .dashboard-content { padding: 14px 14px 20px; }
+  .dashboard-main  { padding-left: 0 !important; padding-bottom: 76px; }
+  .dashboard-content { padding: 16px 14px 24px; }
 
   /* ── Bottom nav ── */
   .bottom-nav { display: flex; }
@@ -552,18 +576,27 @@ textarea.form-input {
   .show-mobile  { display: block !important; }
   .mobile-stack { flex-direction: column !important; }
 
-  /* ── Page titles ── */
+  /* ── Page header rows ── */
   .page-header h1 { font-size: 1.3rem; }
+  .page-header-row h1 { font-size: 1.25rem !important; }
+  .page-header-row { margin-bottom: 18px !important; }
+  .page-header-row .btn { flex-shrink: 0; font-size: 0.8rem !important; padding: 8px 14px !important; }
+
+  /* ── DataTable header bar: stack search + actions ── */
+  .dt-header-bar { flex-direction: column !important; align-items: stretch !important; }
+  .dt-header-bar > div { width: 100% !important; }
+  .dt-search-wrap { width: 100% !important; max-width: none !important; }
+  .dt-search-wrap input { width: 100% !important; }
 
   /* ── TABLE CARD VIEW ── */
   /* Any table inside .card-table-wrap becomes a card list on mobile */
-  .card-table-wrap                    { border: none !important; background: transparent !important; box-shadow: none !important; }
+  .card-table-wrap                    { border: none !important; background: transparent !important; box-shadow: none !important; border-radius: 0 !important; }
   .card-table-wrap table              { display: block; }
   .card-table-wrap thead              { display: none; }
   .card-table-wrap tbody              { display: flex; flex-direction: column; gap: 10px; }
   .card-table-wrap tr                 {
     display: block;
-    border-radius: 14px;
+    border-radius: 12px;
     border: 1px solid var(--border);
     background: var(--bg-card);
     box-shadow: var(--shadow-sm);
@@ -575,9 +608,10 @@ textarea.form-input {
     justify-content: space-between;
     align-items: center;
     gap: 10px;
-    padding: 10px 14px;
+    padding: 11px 14px;
     border-bottom: 1px solid var(--border-light);
-    font-size: 0.83rem;
+    font-size: 0.835rem;
+    min-height: 42px;
   }
   .card-table-wrap td:last-child      { border-bottom: none; }
   .card-table-wrap td::before         {
@@ -588,13 +622,15 @@ textarea.form-input {
     text-transform: uppercase;
     letter-spacing: 0.05em;
     flex-shrink: 0;
-    min-width: 76px;
+    min-width: 80px;
   }
   /* Hide "action" columns label for cleaner look */
+  .card-table-wrap td[data-label="Actions"]::before,
   .card-table-wrap td[data-label="Action"]::before,
   .card-table-wrap td[data-label=""]::before { display: none; }
+  .card-table-wrap td[data-label="Actions"],
   .card-table-wrap td[data-label="Action"],
-  .card-table-wrap td[data-label=""] { justify-content: flex-end; }
+  .card-table-wrap td[data-label=""] { justify-content: flex-end; padding-top: 10px; padding-bottom: 10px; }
 
   /* ── STUDENT DASHBOARD GRID ── */
   .student-stats-grid  { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
@@ -606,21 +642,56 @@ textarea.form-input {
   .stat-grid-3 { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
 
   /* ── HOD Dashboard priority card header ── */
-  .hod-priority-card .hod-priority-header { flex-direction: column !important; align-items: flex-start !important; }
+  .hod-priority-card .hod-priority-header { flex-direction: column !important; align-items: stretch !important; }
+  .hod-priority-card .hod-priority-header > div:last-child { width: 100% !important; max-width: none !important; }
   .hod-priority-card .hod-priority-header input { width: 100% !important; }
 
   /* ── Tabs wrap ── */
   .tab-row { flex-wrap: wrap !important; gap: 6px !important; }
   .tab-row button { font-size: 0.76rem !important; padding: 7px 12px !important; }
 
-  /* ── Modals full screen ── */
+  /* ── Modals — centered, not top-pinned ── */
+  .modal-overlay-mobile {
+    align-items: flex-start !important;
+    padding: 16px 10px 20px !important;
+  }
   .modal-box { 
     width: 96vw !important; 
     max-width: none !important; 
-    max-height: 92vh !important; 
-    border-radius: 18px !important;
+    max-height: 90vh !important;
+    overflow-y: auto !important;
+    border-radius: 16px !important;
     margin: auto !important;
   }
+
+  /* ── Bottom nav safe area (iPhone notch) ── */
+  .bottom-nav {
+    padding-bottom: env(safe-area-inset-bottom, 4px);
+    height: auto;
+    min-height: 62px;
+  }
+  .bottom-nav-item { padding: 8px 0 6px; }
+
+  /* ── Active dot on bottom nav ── */
+  .bottom-nav-dot {
+    bottom: 5px;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  /* ── Horizontal scroll strips: hide scrollbar track ── */
+  .scroll-strip::-webkit-scrollbar { display: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   EXTRA SMALL (< 380px) — iPhone SE & tiny screens
+═══════════════════════════════════════════════════════════════ */
+@media (max-width: 380px) {
+  .dashboard-content { padding: 12px 10px 20px; }
+  .page-header-row h1 { font-size: 1.1rem !important; }
+  .stat-grid-4, .stat-grid-3 { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+  .student-stats-grid { gap: 8px !important; }
+  .bottom-nav-label { font-size: 0.52rem; }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -782,4 +853,100 @@ textarea.form-input {
 /* ── Loading spinner in dark ── */
 .theme-dark .bg-card {
   background: var(--gradient-card) !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SKELETON LOADING ANIMATION
+═══════════════════════════════════════════════════════════════ */
+@keyframes skeleton-shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.skeleton-line {
+  background: linear-gradient(
+    90deg,
+    var(--border) 25%,
+    var(--bg-secondary) 50%,
+    var(--border) 75%
+  );
+  background-size: 800px 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PRINT / PDF STYLES
+   Triggered by window.print() via PrintButton component.
+   Hides all navigation and makes content full-width.
+═══════════════════════════════════════════════════════════════ */
+@media print {
+  /* Hide everything that isn't content */
+  .no-print,
+  nav,
+  aside,
+  .bottom-nav,
+  .navbar,
+  header,
+  .sidebar,
+  .modal-overlay,
+  button:not(.print-keep),
+  .btn,
+  .page-header-row .btn,
+  [class*="notif"],
+  [class*="dropdown"] {
+    display: none !important;
+  }
+
+  /* Full width layout */
+  body, html { background: white !important; color: black !important; }
+  .dashboard-main { padding-left: 0 !important; padding-bottom: 0 !important; }
+  .dashboard-content { padding: 16px !important; max-width: 100% !important; }
+
+  /* Tables print cleanly */
+  .data-table, table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 11px !important;
+    page-break-inside: auto;
+  }
+  .data-table th, .data-table td,
+  table th, table td {
+    border: 1px solid #ccc !important;
+    padding: 6px 8px !important;
+    color: black !important;
+  }
+  .data-table thead, table thead {
+    background: #f0f0f0 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Cards print as normal boxes */
+  .card, [class*="card"] {
+    box-shadow: none !important;
+    border: 1px solid #ddd !important;
+    break-inside: avoid;
+  }
+
+  /* Page title stays */
+  .page-header-row h1, .page-header h1 {
+    font-size: 16px !important;
+    color: black !important;
+  }
+
+  /* Force color badges to show */
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* Print header watermark */
+  .dashboard-content::before {
+    content: 'Vignan College — Academic Report';
+    display: block;
+    font-size: 10px;
+    color: #888;
+    margin-bottom: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
 }

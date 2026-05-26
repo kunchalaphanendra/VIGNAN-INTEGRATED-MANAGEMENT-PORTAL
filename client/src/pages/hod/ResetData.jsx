@@ -89,9 +89,11 @@ export default function ResetData() {
 
     const doReset = async () => {
         if (confirmText !== 'RESET') return alert('Type RESET to confirm.');
+        const password = window.prompt('Please enter your HOD password to confirm:');
+        if (!password) return;
         setResetting(true);
         try {
-            const body = { year: Number(year), ...checks };
+            const body = { year: Number(year), password, ...checks };
             const r = await api.post('/hod/reset-data', body);
             setResult(r.data);
             setShowConfirm(false);
@@ -130,13 +132,14 @@ export default function ResetData() {
             {/* Warning banner */}
             <div style={{
                 padding: '14px 18px', borderRadius: 12, marginBottom: 24,
-                background: 'rgba(220,38,38,0.07)', border: '1.5px solid rgba(220,38,38,0.25)',
+                background: 'rgba(217,119,6,0.07)', border: '1.5px solid rgba(217,119,6,0.28)',
                 display: 'flex', gap: 12, alignItems: 'flex-start',
             }}>
-                <span style={{ fontSize: '1.3rem', flexShrink: 0 }}>⛔</span>
-                <div style={{ fontSize: '0.83rem', color: '#991B1B', lineHeight: 1.7 }}>
-                    <strong>This action is permanent and cannot be undone.</strong><br />
-                    All selected records will be deleted from the database. Use this only for new academic year resets after promoting students.
+                <span style={{ fontSize: '1.3rem', flexShrink: 0 }}>🛡️</span>
+                <div style={{ fontSize: '0.83rem', color: '#92400E', lineHeight: 1.7 }}>
+                    <strong>Attendance and marks are archived before deletion.</strong><br />
+                    You can ask a developer to restore data from the <code>marks_archive</code> and <code>attendance_archive</code> tables if needed.
+                    Other records (grades, CGPA, backlogs, notices, placements) are permanently deleted.
                     Student accounts are <strong>not</strong> affected.
                 </div>
             </div>
@@ -296,9 +299,11 @@ export default function ResetData() {
             {/* Confirmation modal */}
             <Modal isOpen={showConfirm} onClose={() => !resetting && setShowConfirm(false)} title="⛔ Confirm Data Reset">
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                    <div style={{ padding: '12px 16px', borderRadius: 10, background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.2)', fontSize: '0.83rem', color: '#991B1B', lineHeight: 1.7 }}>
-                        You are about to permanently delete <strong>{selectedItems.length} data type(s)</strong> for all
-                        active <strong>{YEAR_LABELS[year]}</strong> students. This <strong>cannot be undone</strong>.
+                    <div style={{ padding: '12px 16px', borderRadius: 10, background: 'rgba(217,119,6,0.07)', border: '1px solid rgba(217,119,6,0.25)', fontSize: '0.83rem', color: '#92400E', lineHeight: 1.7 }}>
+                        You are about to clear <strong>{selectedItems.length} data type(s)</strong> for all
+                        active <strong>{YEAR_LABELS[year]}</strong> students.
+                        <br />✅ <strong>Attendance &amp; Marks will be archived</strong> before deletion and can be recovered by a developer.
+                        <br />⚠️ Grades, CGPA, backlogs, notices and placements are permanently deleted.
                     </div>
 
                     <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: '12px 14px' }}>

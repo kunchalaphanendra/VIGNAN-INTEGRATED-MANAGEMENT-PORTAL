@@ -60,15 +60,24 @@ export default function BottomNav({ onMenuClick }) {
                 >
                     {({ isActive }) => (
                         <>
-                            <Icon size={22} />
+                            {isActive && (
+                                <span style={{
+                                    position: 'absolute',
+                                    top: 0, left: '50%',
+                                    transform: 'translateX(-50%)',
+                                    width: 24, height: 3,
+                                    borderRadius: '0 0 3px 3px',
+                                    background: color,
+                                }} />
+                            )}
+                            <Icon size={21} />
                             <span className="bottom-nav-label">{label}</span>
-                            {isActive && <span className="bottom-nav-dot" style={{ background: color }} />}
                         </>
                     )}
                 </NavLink>
             ))}
             <button className="bottom-nav-item" onClick={onMenuClick}>
-                <HiOutlineMenu size={22} />
+                <HiOutlineMenu size={21} />
                 <span className="bottom-nav-label">More</span>
             </button>
         </nav>

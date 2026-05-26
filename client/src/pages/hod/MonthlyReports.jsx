@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import DashboardLayout from '../../components/DashboardLayout';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import PrintButton from '../../components/PrintButton';
 import api from '../../utils/api';
 
 /* ─── Toast ──────────────────────────────────────────────────────────────── */
@@ -371,23 +372,26 @@ export default function HodMonthlyReports() {
                         Send academic performance reports to parents via WhatsApp
                     </p>
                 </div>
-                <button
-                    onClick={() => displayed.length > 0 && setShowSendAll(true)}
-                    disabled={displayed.length === 0}
-                    style={{
-                        padding: '11px 22px', borderRadius: 10, border: 'none',
-                        background: displayed.length === 0
-                            ? 'var(--border)'
-                            : 'linear-gradient(135deg, #25D366, #128C7E)',
-                        color: 'white', fontWeight: 700, fontSize: '0.875rem',
-                        cursor: displayed.length === 0 ? 'not-allowed' : 'pointer',
-                        display: 'flex', alignItems: 'center', gap: 8,
-                        boxShadow: displayed.length > 0 ? '0 4px 14px rgba(37,211,102,0.35)' : 'none',
-                        transition: 'all 0.2s',
-                    }}
-                >
-                    📨 Send Report to All {displayed.length} Parents
-                </button>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <PrintButton label="Download PDF" />
+                    <button
+                        onClick={() => displayed.length > 0 && setShowSendAll(true)}
+                        disabled={displayed.length === 0}
+                        style={{
+                            padding: '11px 22px', borderRadius: 10, border: 'none',
+                            background: displayed.length === 0
+                                ? 'var(--border)'
+                                : 'linear-gradient(135deg, #25D366, #128C7E)',
+                            color: 'white', fontWeight: 700, fontSize: '0.875rem',
+                            cursor: displayed.length === 0 ? 'not-allowed' : 'pointer',
+                            display: 'flex', alignItems: 'center', gap: 8,
+                            boxShadow: displayed.length > 0 ? '0 4px 14px rgba(37,211,102,0.35)' : 'none',
+                            transition: 'all 0.2s',
+                        }}
+                    >
+                        📨 Send Report to All {displayed.length} Parents
+                    </button>
+                </div>
             </div>
 
             {/* Filters */}

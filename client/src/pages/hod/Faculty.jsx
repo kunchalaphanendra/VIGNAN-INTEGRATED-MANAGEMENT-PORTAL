@@ -214,7 +214,12 @@ export default function HodFaculty() {
     const [faculty, setFaculty]     = useState([]);
     const [loading, setLoading]     = useState(true);
     const [showCreate, setShowCreate] = useState(false);
+    const [editId, setEditId]         = useState(null);
     const [showLink, setShowLink]   = useState(false);
+    const [showImport, setShowImport] = useState(false);
+    const [importFile, setImportFile] = useState(null);
+    const [importLoading, setImportLoading] = useState(false);
+    const [importResult, setImportResult] = useState(null); // {success, message, details}
     const [search, setSearch]       = useState('');
     const [form, setForm] = useState({
         full_name: '', email: '', phone: '', password: '',
@@ -231,20 +236,67 @@ export default function HodFaculty() {
         finally { setLoading(false); }
     };
 
-    const handleCreate = async (e) => {
+    const handleOpenCreate = () => {
+        setEditId(null);
+        setForm({ full_name: '', email: '', phone: '', password: '', designation: '', qualification: '', joining_date: '' });
+        setShowCreate(true);
+    };
+
+    const handleOpenEdit = (f) => {
+        setEditId(f.id);
+        let formattedDate = '';
+        if (f.joining_date) {
+            const dateObj = new Date(f.joining_date);
+            if (!isNaN(dateObj.getTime())) {
+                formattedDate = dateObj.toISOString().split('T')[0];
+            }
+        }
+        setForm({
+            full_name: f.full_name || '',
+            email: f.email || '',
+            phone: f.phone || '',
+            password: '',
+            designation: f.designation || '',
+            qualification: f.qualification || '',
+            joining_date: formattedDate,
+        });
+        setShowCreate(true);
+    };
+
+    const handleCloseModal = () => {
+        setShowCreate(false);
+        setEditId(null);
+        setForm({ full_name: '', email: '', phone: '', password: '', designation: '', qualification: '', joining_date: '' });
+    };
+
+    const handleCreateOrUpdate = async (e) => {
         e.preventDefault();
         try {
-            const r = await api.post('/hod/faculty', form);
-            alert(`Faculty created!\nLogin ID: ${r.data.login_id}`);
-            setShowCreate(false);
-            setForm({ full_name: '', email: '', phone: '', password: '', designation: '', qualification: '', joining_date: '' });
-            load();
-        } catch (err) { alert(err.response?.data?.error || 'Error'); }
+            if (editId) {
+                const payload = { ...form };
+                if (!payload.password.trim()) {
+                    delete payload.password;
+                }
+                await api.patch(`/hod/faculty/${editId}`, payload);
+                alert('Faculty updated successfully!');
+                handleCloseModal();
+                load();
+            } else {
+                const r = await api.post('/hod/faculty', form);
+                alert(`Faculty created!\nLogin ID: ${r.data.login_id}`);
+                handleCloseModal();
+                load();
+            }
+        } catch (err) {
+            alert(err.response?.data?.error || 'Error saving faculty details');
+        }
     };
 
     const handleDeactivate = async (id) => {
         if (!confirm('Are you sure you want to deactivate this faculty member?')) return;
-        try { await api.delete(`/hod/faculty/${id}`); load(); } catch { }
+        const password = window.prompt('Please enter your HOD password to confirm deactivation:');
+        if (!password) return;
+        try { await api.delete(`/hod/faculty/${id}`, { data: { password } }); load(); } catch (err) { alert(err.response?.data?.error || 'Deactivation failed'); }
     };
 
     const handleUnlinkDirect = async (id) => {
@@ -253,6 +305,37 @@ export default function HodFaculty() {
     };
 
     const upd = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+    // ── Faculty import ─────────────────────────────────────────────────────
+    const handleImport = async (e) => {
+        e.preventDefault();
+        if (!importFile) return;
+        const fd = new FormData();
+        fd.append('file', importFile);
+        setImportLoading(true);
+        setImportResult(null);
+        try {
+            const r = await api.post('/hod/faculty/import', fd, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            setImportResult({ success: true, message: r.data.message });
+            setImportFile(null);
+            load();
+        } catch (err) {
+            const d = err.response?.data;
+            setImportResult({ success: false, message: d?.error || 'Import failed', details: d?.details });
+        } finally {
+            setImportLoading(false);
+        }
+    };
+
+    const downloadTemplate = () => {
+        const csv = 'full_name,email,phone,password,designation,qualification,joining_date\nDr. Ramesh Kumar,ramesh@vignan.ac.in,9876543210,Pass@123,Associate Professor,M.Tech,2024-06-01';
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = 'faculty_import_template.csv';
+        a.click(); URL.revokeObjectURL(url);
+    };
 
     const filtered = useMemo(() => {
         const q = search.trim().toLowerCase();
@@ -298,7 +381,21 @@ export default function HodFaculty() {
                     >
                         🔗 Link Existing Faculty
                     </button>
-                    <button onClick={() => setShowCreate(true)} className="btn btn-hod" style={{ whiteSpace: 'nowrap' }}>
+                    <button
+                        onClick={() => { setShowImport(true); setImportResult(null); setImportFile(null); }}
+                        style={{
+                            padding: '9px 18px', borderRadius: 10, fontWeight: 700, fontSize: '0.85rem',
+                            border: '1.5px solid rgba(46,125,50,0.35)',
+                            background: 'rgba(46,125,50,0.08)', color: '#2E7D32',
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7,
+                            transition: 'all 0.15s', whiteSpace: 'nowrap',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background='#2E7D32'; e.currentTarget.style.color='white'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background='rgba(46,125,50,0.08)'; e.currentTarget.style.color='#2E7D32'; }}
+                    >
+                        📥 Import CSV/Excel
+                    </button>
+                    <button onClick={handleOpenCreate} className="btn btn-hod" style={{ whiteSpace: 'nowrap' }}>
                         + Add Faculty
                     </button>
                 </div>
@@ -406,11 +503,25 @@ export default function HodFaculty() {
                                                     }}
                                                 >Unlink</button>
                                             ) : (
-                                                <button
-                                                    onClick={() => handleDeactivate(f.id)}
-                                                    className="btn btn-sm btn-danger"
-                                                    disabled={!f.is_active}
-                                                >Deactivate</button>
+                                                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                                    <button
+                                                        onClick={() => handleOpenEdit(f)}
+                                                        style={{
+                                                            padding: '5px 12px', borderRadius: 7, border: '1.5px solid rgba(37,99,235,0.3)',
+                                                            background: 'rgba(37,99,235,0.06)', color: '#2563EB',
+                                                            fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer',
+                                                            transition: 'all 0.15s'
+                                                        }}
+                                                        onMouseEnter={e => { e.currentTarget.style.background = '#2563EB'; e.currentTarget.style.color = '#fff'; }}
+                                                        onMouseLeave={e => { e.currentTarget.style.background = 'rgba(37,99,235,0.06)'; e.currentTarget.style.color = '#2563EB'; }}
+                                                    >Edit</button>
+                                                    <button
+                                                        onClick={() => handleDeactivate(f.id)}
+                                                        className="btn btn-sm btn-danger"
+                                                        disabled={!f.is_active}
+                                                        style={{ padding: '5px 12px', fontSize: '0.74rem', fontWeight: 700, height: 'auto', lineHeight: 'normal' }}
+                                                    >Deactivate</button>
+                                                </div>
                                             )}
                                         </td>
                                     </tr>
@@ -428,9 +539,72 @@ export default function HodFaculty() {
                 onLinked={load}
             />
 
-            {/* Create modal */}
-            <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="Add New Faculty Member">
-                <form onSubmit={handleCreate} className="modal-form">
+            {/* Import modal */}
+            <Modal isOpen={showImport} onClose={() => setShowImport(false)} title="Import Faculty from CSV / Excel">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {/* Template download */}
+                    <div style={{ padding: '12px 16px', borderRadius: 10, background: 'rgba(46,125,50,0.06)', border: '1px solid rgba(46,125,50,0.2)' }}>
+                        <p style={{ fontSize: '0.83rem', fontWeight: 700, color: '#2E7D32', margin: '0 0 6px' }}>📋 Required columns:</p>
+                        <code style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>full_name, email, phone, password</code>
+                        <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '6px 0 0' }}>Optional: designation, qualification, joining_date</p>
+                        <button onClick={downloadTemplate} style={{
+                            marginTop: 10, padding: '6px 14px', borderRadius: 7,
+                            border: '1.5px solid rgba(46,125,50,0.4)', background: 'transparent',
+                            color: '#2E7D32', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer',
+                        }}>⬇ Download Template CSV</button>
+                    </div>
+
+                    {/* File input */}
+                    <form onSubmit={handleImport}>
+                        <div style={{ border: '2px dashed var(--border)', borderRadius: 10, padding: '20px', textAlign: 'center' }}>
+                            <input
+                                type="file" accept=".csv,.xlsx,.xls"
+                                onChange={e => { setImportFile(e.target.files[0]); setImportResult(null); }}
+                                style={{ fontSize: '0.85rem' }}
+                            />
+                            {importFile && (
+                                <p style={{ fontSize: '0.78rem', color: '#2E7D32', fontWeight: 600, marginTop: 8 }}>
+                                    ✓ {importFile.name} selected
+                                </p>
+                            )}
+                        </div>
+
+                        {/* Result banner */}
+                        {importResult && (
+                            <div style={{
+                                marginTop: 14, padding: '12px 16px', borderRadius: 10,
+                                background: importResult.success ? 'rgba(22,163,74,0.07)' : 'rgba(220,38,38,0.07)',
+                                border: `1px solid ${importResult.success ? 'rgba(22,163,74,0.3)' : 'rgba(220,38,38,0.3)'}`,
+                                color: importResult.success ? '#15803D' : '#DC2626',
+                            }}>
+                                <p style={{ fontWeight: 700, fontSize: '0.85rem', margin: 0 }}>{importResult.message}</p>
+                                {importResult.details && (
+                                    <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: '0.75rem', lineHeight: 1.7 }}>
+                                        {importResult.details.slice(0, 10).map((d, i) => <li key={i}>{d}</li>)}
+                                        {importResult.details.length > 10 && <li>...and {importResult.details.length - 10} more errors</li>}
+                                    </ul>
+                                )}
+                            </div>
+                        )}
+
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+                            <button type="button" className="btn btn-outline" onClick={() => setShowImport(false)}>Cancel</button>
+                            <button
+                                type="submit"
+                                disabled={!importFile || importLoading}
+                                className="btn btn-hod"
+                                style={{ opacity: (!importFile || importLoading) ? 0.65 : 1 }}
+                            >
+                                {importLoading ? 'Importing…' : '📥 Import Faculty'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </Modal>
+
+            {/* Create / Edit modal */}
+            <Modal isOpen={showCreate} onClose={handleCloseModal} title={editId ? "Edit Faculty Member" : "Add New Faculty Member"}>
+                <form onSubmit={handleCreateOrUpdate} className="modal-form">
                     <div className="modal-section">
                         <p className="modal-section-title">Personal Information</p>
                         <div className="form-group">
@@ -468,13 +642,23 @@ export default function HodFaculty() {
                     <div className="modal-section">
                         <p className="modal-section-title">Account Security</p>
                         <div className="form-group">
-                            <label className="form-label">Login Password <span className="required">*</span></label>
-                            <input type="password" className="form-input" placeholder="Minimum 8 characters" value={form.password} onChange={e => upd('password', e.target.value)} required minLength={8} />
+                            <label className="form-label">
+                                Login Password {editId ? '' : <span className="required">*</span>}
+                            </label>
+                            <input 
+                                type="password" 
+                                className="form-input" 
+                                placeholder={editId ? "Leave blank to keep current password" : "Minimum 8 characters"} 
+                                value={form.password} 
+                                onChange={e => upd('password', e.target.value)} 
+                                required={!editId} 
+                                minLength={editId && !form.password ? undefined : 8} 
+                            />
                         </div>
                     </div>
                     <div className="modal-footer">
-                        <button type="button" className="btn btn-outline" onClick={() => setShowCreate(false)}>Cancel</button>
-                        <button type="submit" className="btn btn-hod">Create Faculty</button>
+                        <button type="button" className="btn btn-outline" onClick={handleCloseModal}>Cancel</button>
+                        <button type="submit" className="btn btn-hod">{editId ? "Save Changes" : "Create Faculty"}</button>
                     </div>
                 </form>
             </Modal>
