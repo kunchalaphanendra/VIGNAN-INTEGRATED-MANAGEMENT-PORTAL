@@ -246,18 +246,38 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
     console.log(`🚀 Vignan Portal server running on port ${PORT}`);
 
-    // ── Daily auto-backup at 2:00 AM ─────────────────────────────────────────
+    // ── Automated Tiered Backups ─────────────────────────────────────────────
     try {
         const cron = require('node-cron');
         const { runBackup } = require('./backup');
+
+        // 1. Daily Backup: At 2:00 AM IST every day
         cron.schedule('0 2 * * *', () => {
             console.log('[Backup] ⏰ Daily auto-backup starting...');
-            runBackup()
-                .then(r => console.log(`[Backup] ✅ Auto-backup done: ${r.file} (${r.size})`))
-                .catch(e => console.error('[Backup] ❌ Auto-backup failed:', e.message));
+            runBackup('daily')
+                .then(r => console.log(`[Backup] ✅ Daily backup completed: ${r.file} (${r.size})`))
+                .catch(e => console.error('[Backup] ❌ Daily backup failed:', e.message));
         }, { timezone: 'Asia/Kolkata' });
         console.log('[Backup] ⏰ Daily backup scheduled at 2:00 AM IST');
+
+        // 2. Weekly Backup: At 3:00 AM IST every Sunday
+        cron.schedule('0 3 * * 0', () => {
+            console.log('[Backup] ⏰ Weekly auto-backup starting...');
+            runBackup('weekly')
+                .then(r => console.log(`[Backup] ✅ Weekly backup completed: ${r.file} (${r.size})`))
+                .catch(e => console.error('[Backup] ❌ Weekly backup failed:', e.message));
+        }, { timezone: 'Asia/Kolkata' });
+        console.log('[Backup] ⏰ Weekly backup scheduled at 3:00 AM IST (Sundays)');
+
+        // 3. Monthly Backup: At 4:00 AM IST on the 1st of every month
+        cron.schedule('0 4 1 * *', () => {
+            console.log('[Backup] ⏰ Monthly auto-backup starting...');
+            runBackup('monthly')
+                .then(r => console.log(`[Backup] ✅ Monthly backup completed: ${r.file} (${r.size})`))
+                .catch(e => console.error('[Backup] ❌ Monthly backup failed:', e.message));
+        }, { timezone: 'Asia/Kolkata' });
+        console.log('[Backup] ⏰ Monthly backup scheduled at 4:00 AM IST (1st of month)');
     } catch (e) {
-        console.warn('[Backup] node-cron not available, auto-backup disabled:', e.message);
+        console.warn('[Backup] node-cron scheduler setup failed:', e.message);
     }
 });

@@ -45,3 +45,6 @@ firebase-adminsdk*.json
 
 # Package lock files (optional — remove these lines if you want to keep them)
 # package-lock.json
+
+# Local database backups and archives
+backups/

@@ -154,7 +154,8 @@ function todayIST() {
     return new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in server local tz
 }
 
-async function ensureSessionsTable() {
+async function ensureSessionsTable(conn = db) {
+    const db = conn;
     await db.query(`
         CREATE TABLE IF NOT EXISTS attendance_sessions (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -236,7 +237,8 @@ async function ensureSessionsTable() {
 }
 
 // ─── Ensure attendance_conflicts table exists ──────────────────────────────
-async function ensureConflictsTable() {
+async function ensureConflictsTable(conn = db) {
+    const db = conn;
     await db.query(`
         CREATE TABLE IF NOT EXISTS attendance_conflicts (
             id              INT AUTO_INCREMENT PRIMARY KEY,
@@ -454,30 +456,41 @@ router.post('/sessions', async (req, res) => {
 
 // POST /api/faculty/sessions/:id/attendance — Save student records for a session
 router.post('/sessions/:id/attendance', async (req, res) => {
+    const conn = await db.getConnection();
     try {
         const sessionId = parseInt(req.params.id);
         const { records } = req.body; // [{ student_id, status }]
-        if (!records || records.length === 0) return res.status(400).json({ error: 'records required' });
+        if (!records || records.length === 0) {
+            conn.release();
+            return res.status(400).json({ error: 'records required' });
+        }
+
+        await conn.beginTransaction();
 
         // Fetch session to get assignment + date
-        const [sessions] = await db.query(
+        const [sessions] = await conn.query(
             'SELECT ats.*, fa.department_id, fa.year, fa.section FROM attendance_sessions ats JOIN faculty_assignments fa ON fa.id = ats.assignment_id WHERE ats.id=? AND ats.faculty_id=?',
             [sessionId, req.user.id]
         );
-        if (sessions.length === 0) return res.status(404).json({ error: 'Session not found' });
+        if (sessions.length === 0) {
+            await conn.rollback();
+            conn.release();
+            return res.status(404).json({ error: 'Session not found' });
+        }
         const sess = sessions[0];
 
         // Save attendance records — one row per student per SESSION (period).
-        // We include period_number so that multiple periods on the same day
-        // create SEPARATE rows instead of overwriting the previous one.
         for (const r of records) {
-            await db.query(
+            await conn.query(
                 `INSERT INTO attendance (student_id, assignment_id, date, period_number, status, marked_by)
                  VALUES (?, ?, ?, ?, ?, ?)
                  ON DUPLICATE KEY UPDATE status=VALUES(status), marked_by=VALUES(marked_by)`,
                 [r.student_id, sess.assignment_id, sess.session_date, sess.period_number ?? null, r.status, req.user.id]
             );
         }
+
+        await conn.commit();
+        conn.release();
 
         const outsideWindow = !!sess.outside_window;
         res.json({
@@ -490,13 +503,427 @@ router.post('/sessions/:id/attendance', async (req, res) => {
                 : null,
         });
     } catch (err) {
+        await conn.rollback();
+        conn.release();
         console.error('Save session attendance error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
 
-// POST /api/faculty/sessions/sync-offline — Sync an attendance entry saved while offline
-// Called by the client's syncService when internet returns.
+router.post('/sessions/sync-offline', async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+        const { assignment_id, session_date, period_number, start_time, end_time, records, saved_at } = req.body;
+        if (!assignment_id || !records || records.length === 0) {
+            conn.release();
+            return res.status(400).json({ error: 'assignment_id and records required' });
+        }
+
+        await conn.beginTransaction();
+
+        // Verify faculty owns assignment
+        const [assign] = await conn.query(
+            'SELECT fa.*, d.id as dept_id FROM faculty_assignments fa JOIN departments d ON d.id = fa.department_id WHERE fa.id=? AND fa.faculty_id=?',
+            [assignment_id, req.user.id]
+        );
+        if (assign.length === 0) {
+            await conn.rollback();
+            conn.release();
+            return res.status(403).json({ error: 'Not your assignment' });
+        }
+
+        const deptId   = assign[0].department_id || assign[0].dept_id;
+        const year     = assign[0].year;
+        const section  = assign[0].section;
+        const dateStr  = session_date || todayIST();
+
+        await ensureSessionsTable(conn);
+        await ensureConflictsTable(conn);
+
+        // ── Cross-faculty conflict check ──────────────────────────────────────
+        if (period_number != null) {
+            const [crossCheck] = await conn.query(`
+                SELECT ats.id, ats.faculty_id, u.full_name AS faculty_name
+                FROM attendance_sessions ats
+                JOIN users u ON u.id = ats.faculty_id
+                WHERE ats.department_id = ?
+                  AND ats.year          = ?
+                  AND ats.section       = ?
+                  AND ats.period_number = ?
+                  AND ats.session_date  = ?
+                  AND ats.faculty_id   != ?
+                LIMIT 1
+            `, [deptId, year, section, period_number, dateStr, req.user.id]);
+
+            if (crossCheck.length > 0) {
+                // Log conflict for HOD to resolve
+                await conn.query(`
+                    INSERT INTO attendance_conflicts
+                    (department_id, year, section, session_date, period_number,
+                     faculty_a_id, faculty_b_id, faculty_a_records, faculty_b_records, saved_at_offline)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE
+                      faculty_b_id = VALUES(faculty_b_id),
+                      faculty_b_records = VALUES(faculty_b_records),
+                      updated_at = CURRENT_TIMESTAMP
+                `, [
+                    deptId, year, section, dateStr, period_number,
+                    crossCheck[0].faculty_id, req.user.id,
+                    JSON.stringify([]),         // faculty_a already in DB
+                    JSON.stringify(records),    // faculty_b's offline submission
+                    saved_at || null,
+                ]).catch(() => {}); // non-fatal
+
+                await conn.commit();
+                conn.release();
+                return res.status(409).json({
+                    error:    'Conflict — period already marked by another faculty',
+                    taken_by: crossCheck[0].faculty_name,
+                    conflict: true,
+                });
+            }
+        }
+
+        // ── Determine if saved_at was within the period window ─────────────────
+        let isOutsideWindow = false;
+        let windowNote      = null;
+
+        if (start_time && end_time && saved_at) {
+            try {
+                const [periodRows] = await conn.query(
+                    `SELECT window_open_before, window_close_after
+                     FROM class_periods WHERE department_id=? AND period_number=? LIMIT 1`,
+                    [deptId, period_number ?? null]
+                ).catch(() => [[]]);
+
+                const openBefore  = periodRows[0]?.window_open_before ?? 5;
+                const closeAfter  = periodRows[0]?.window_close_after ?? 10;
+
+                const toMin = (t) => { const [h,m] = t.split(':').map(Number); return h*60+m; };
+                const savedDate   = new Date(saved_at);
+                const savedMin    = savedDate.getHours() * 60 + savedDate.getMinutes();
+                const windowStart = toMin(start_time) - openBefore;
+                const windowEnd   = toMin(end_time)   + closeAfter;
+
+                isOutsideWindow = savedMin < windowStart || savedMin > windowEnd;
+
+                if (isOutsideWindow) {
+                    const hh = String(savedDate.getHours()).padStart(2,'0');
+                    const mm = String(savedDate.getMinutes()).padStart(2,'0');
+                    windowNote = `Offline attendance marked at ${hh}:${mm} — outside Period ${period_number} window (${start_time.slice(0,5)}–${end_time.slice(0,5)}). Pending HOD confirmation.`;
+                }
+            } catch { /* non-fatal */ }
+        }
+
+        // ── Check if this faculty already submitted this period (idempotent) ──
+        const [existing] = await conn.query(
+            `SELECT id FROM attendance_sessions
+             WHERE faculty_id=? AND department_id=? AND year=? AND section=? AND session_date=? AND period_number<=>?`,
+            [req.user.id, deptId, year, section, dateStr, period_number ?? null]
+        );
+
+        let sessionId;
+        if (existing.length > 0) {
+            sessionId = existing[0].id;
+        } else {
+            const [result] = await conn.query(
+                `INSERT INTO attendance_sessions
+                 (assignment_id, faculty_id, department_id, year, section, session_date,
+                  period_number, start_time, end_time, outside_window, hod_confirmed, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [assignment_id, req.user.id, deptId, year, section, dateStr,
+                 period_number ?? null, start_time ?? null, end_time ?? null,
+                 isOutsideWindow ? 1 : 0,
+                 isOutsideWindow ? null : 1,
+                 req.user.id]
+            );
+            sessionId = result.insertId;
+        }
+
+        // ── Save attendance records (bulk INSERT for atomicity) ──────────────
+        if (records.length > 0) {
+            const placeholders = records.map(() => '(?, ?, ?, ?, ?, ?)').join(', ');
+            const values = records.flatMap(r => [
+                r.student_id, assignment_id, dateStr,
+                period_number ?? null, r.status, req.user.id
+            ]);
+            await conn.query(
+                `INSERT INTO attendance (student_id, assignment_id, date, period_number, status, marked_by)
+                 VALUES ${placeholders}
+                 ON DUPLICATE KEY UPDATE status=VALUES(status), marked_by=VALUES(marked_by)`,
+                values
+            );
+        }
+
+        await conn.commit();
+        conn.release();
+
+        res.json({
+            message:        'Offline attendance synced',
+            session_id:     sessionId,
+            count:          records.length,
+            outside_window: isOutsideWindow,
+            window_note:    windowNote,
+        });
+    } catch (err) {
+        await conn.rollback();
+        conn.release();
+        console.error('sync-offline error:', err);
+        if (err.code === 'ER_DUP_ENTRY')
+            return res.status(409).json({ error: 'Period already taken by another faculty member' });
+        res.status(500).json({ error: 'Server error: ' + err.message });
+    }
+});
+
+// GET /api/faculty/sessions/class-periods-status?assignment_id=&date=
+// Returns all dept periods annotated with who (if anyone) has already taken each one today
+router.get('/sessions/class-periods-status', async (req, res) => {
+    try {
+        const { assignment_id, date } = req.query;
+        if (!assignment_id) return res.status(400).json({ error: 'assignment_id required' });
+
+        // Resolve the class context for this assignment
+        const [assign] = await db.query(
+            'SELECT fa.department_id, fa.year, fa.section FROM faculty_assignments fa WHERE fa.id=? AND fa.faculty_id=?',
+            [assignment_id, req.user.id]
+        );
+        if (assign.length === 0) return res.status(403).json({ error: 'Not your assignment' });
+        const { department_id, year, section } = assign[0];
+
+        const checkDate = date || todayIST();
+
+        // Get all periods for the dept
+        const [periods] = await db.query(
+            'SELECT id, period_number, label, start_time, end_time FROM class_periods WHERE department_id=? ORDER BY period_number',
+            [department_id]
+        ).catch(() => [[]]);
+
+        if (periods.length === 0) return res.json({ periods: [] });
+
+        // For each period, check if any faculty (same dept/year/section) has a session for it today
+        // First try the fast path using department_id/year/section stored directly on sessions
+        let sessions = [];
+        try {
+            const [rows] = await db.query(`
+                SELECT
+                    ats.period_number,
+                    ats.faculty_id,
+                    u.full_name AS faculty_name
+                FROM attendance_sessions ats
+                JOIN users u ON u.id = ats.faculty_id
+                WHERE ats.department_id = ?
+                  AND ats.year          = ?
+                  AND ats.section       = ?
+                  AND ats.session_date  = ?
+            `, [department_id, year, section, checkDate]);
+            sessions = rows;
+        } catch (_e1) {
+            // Fallback: join via faculty_assignments (for older rows without dept/year/section)
+            try {
+                const [rows2] = await db.query(`
+                    SELECT
+                        ats.period_number,
+                        ats.faculty_id,
+                        u.full_name AS faculty_name
+                    FROM attendance_sessions ats
+                    JOIN faculty_assignments fa ON fa.id = ats.assignment_id
+                    JOIN users u ON u.id = ats.faculty_id
+                    WHERE fa.department_id = ?
+                      AND fa.year = ?
+                      AND fa.section = ?
+                      AND ats.session_date = ?
+                `, [department_id, year, section, checkDate]);
+                sessions = rows2;
+            } catch (_e2) { sessions = []; }
+        }
+
+        // Build a map: period_number -> session info
+        const sessionMap = {};
+        for (const s of sessions) {
+            sessionMap[s.period_number] = s;
+        }
+
+        const result = periods.map(p => {
+            const sess = sessionMap[p.period_number];
+            const lockedByMe    = sess ? Number(sess.faculty_id) === Number(req.user.id) : false;
+            const lockedByOther = sess ? Number(sess.faculty_id) !== Number(req.user.id) : false;
+            return {
+                ...p,
+                locked_by_me:    lockedByMe,
+                locked_by_other: lockedByOther,
+                locked_by_name:  lockedByOther ? sess.faculty_name : null,
+            };
+        });
+
+        res.json({ periods: result });
+    } catch (err) {
+        console.error('class-periods-status error:', err);
+        res.json({ periods: [] });
+    }
+});
+
+// POST /api/faculty/sessions — Create an attendance session (with period_number)
+router.post('/sessions', async (req, res) => {
+    try {
+        const { assignment_id, session_date, period_number, start_time, end_time } = req.body;
+        if (!assignment_id) return res.status(400).json({ error: 'assignment_id required' });
+
+        // Verify faculty owns assignment
+        const [assign] = await db.query(
+            'SELECT fa.*, d.id as dept_id FROM faculty_assignments fa JOIN departments d ON d.id = fa.department_id WHERE fa.id=? AND fa.faculty_id=?',
+            [assignment_id, req.user.id]
+        );
+        if (assign.length === 0) return res.status(403).json({ error: 'Not your assignment' });
+
+        const deptId  = assign[0].department_id || assign[0].dept_id;
+        const year    = assign[0].year;
+        const section = assign[0].section;
+        const todayStr = session_date || todayIST();
+
+        // ── Detect outside-window (use IST-aware current time) ──────────────
+        let outsideWindow = 0;
+        if (start_time) {
+            const [cp] = await db.query(
+                'SELECT window_open_before, window_close_after FROM class_periods WHERE department_id=? AND period_number=?',
+                [deptId, period_number ?? -1]
+            ).catch(() => [[]]);
+            const windowOpen  = cp[0]?.window_open_before  ?? 5;
+            const windowClose = cp[0]?.window_close_after  ?? 10;
+
+            const [sh, sm] = start_time.split(':').map(Number);
+            const periodStartMins = sh * 60 + sm;
+            // Server runs in IST (GMT+0530) natively — use local hours directly
+            const nowMins = new Date().getHours() * 60 + new Date().getMinutes();
+            const diffMins = nowMins - periodStartMins;
+
+            outsideWindow = (diffMins < -windowOpen || diffMins > windowClose) ? 1 : 0;
+        }
+
+        await ensureSessionsTable();
+
+        // ── Cross-faculty duplicate guard (class-level) ──────────────────
+        // Check if ANY other faculty (same dept/year/section) has already marked this period today
+        if (period_number != null) {
+            const [crossCheck] = await db.query(`
+                SELECT ats.id, ats.faculty_id, u.full_name AS faculty_name
+                FROM attendance_sessions ats
+                JOIN users u ON u.id = ats.faculty_id
+                WHERE ats.department_id = ?
+                  AND ats.year          = ?
+                  AND ats.section       = ?
+                  AND ats.period_number = ?
+                  AND ats.session_date  = ?
+                  AND ats.faculty_id   != ?
+                LIMIT 1
+            `, [deptId, year, section, period_number, todayStr, req.user.id]);
+
+            if (crossCheck.length > 0) {
+                return res.status(409).json({
+                    error: 'Period already taken',
+                    taken_by: crossCheck[0].faculty_name,
+                    taken_by_id: crossCheck[0].faculty_id,
+                });
+            }
+        }
+
+        // Check for existing session by THIS faculty for this class+period (today only)
+        const [existing] = await db.query(
+            `SELECT id, outside_window, hod_confirmed FROM attendance_sessions
+             WHERE faculty_id=? AND department_id=? AND year=? AND section=? AND session_date=? AND period_number<=>?`,
+            [req.user.id, deptId, year, section, todayStr, period_number ?? null]
+        );
+        if (existing.length > 0) {
+            return res.json({
+                session_id: existing[0].id,
+                already_exists: true,
+                outside_window: !!existing[0].outside_window,
+                hod_confirmed: existing[0].hod_confirmed,
+            });
+        }
+
+        const [result] = await db.query(
+            `INSERT INTO attendance_sessions
+             (assignment_id, faculty_id, department_id, year, section, session_date, period_number, start_time, end_time, outside_window, hod_confirmed, created_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                assignment_id, req.user.id, deptId, year, section, todayStr,
+                period_number ?? null, start_time ?? null, end_time ?? null,
+                outsideWindow,
+                outsideWindow ? 0 : null,
+                req.user.id,
+            ]
+        );
+        res.status(201).json({
+            session_id: result.insertId,
+            outside_window: !!outsideWindow,
+            hod_confirmed: outsideWindow ? 0 : null,
+        });
+    } catch (err) {
+        console.error('Create session error:', err);
+        // If duplicate key error, it means another faculty just beat us — return 409
+        if (err.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ error: 'Period already taken by another faculty member' });
+        }
+        res.status(500).json({ error: 'Failed to create session: ' + err.message });
+    }
+});
+
+// POST /api/faculty/sessions/:id/attendance — Save student records for a session
+router.post('/sessions/:id/attendance', async (req, res) => {
+    const conn = await db.getConnection();
+    try {
+        const sessionId = parseInt(req.params.id);
+        const { records } = req.body; // [{ student_id, status }]
+        if (!records || records.length === 0) {
+            conn.release();
+            return res.status(400).json({ error: 'records required' });
+        }
+
+        await conn.beginTransaction();
+
+        // Fetch session to get assignment + date
+        const [sessions] = await conn.query(
+            'SELECT ats.*, fa.department_id, fa.year, fa.section FROM attendance_sessions ats JOIN faculty_assignments fa ON fa.id = ats.assignment_id WHERE ats.id=? AND ats.faculty_id=?',
+            [sessionId, req.user.id]
+        );
+        if (sessions.length === 0) {
+            await conn.rollback();
+            conn.release();
+            return res.status(404).json({ error: 'Session not found' });
+        }
+        const sess = sessions[0];
+
+        // Save attendance records — one row per student per SESSION (period).
+        for (const r of records) {
+            await conn.query(
+                `INSERT INTO attendance (student_id, assignment_id, date, period_number, status, marked_by)
+                 VALUES (?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE status=VALUES(status), marked_by=VALUES(marked_by)`,
+                [r.student_id, sess.assignment_id, sess.session_date, sess.period_number ?? null, r.status, req.user.id]
+            );
+        }
+
+        await conn.commit();
+        conn.release();
+
+        const outsideWindow = !!sess.outside_window;
+        res.json({
+            message: 'Attendance saved',
+            count: records.length,
+            outside_window: outsideWindow,
+            hod_confirmed: sess.hod_confirmed,
+            window_note: outsideWindow
+                ? `Submitted outside period window — pending HOD confirmation. Attendance will NOT count until HOD confirms.`
+                : null,
+        });
+    } catch (err) {
+        await conn.rollback();
+        conn.release();
+        console.error('Save session attendance error:', err);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 router.post('/sessions/sync-offline', async (req, res) => {
     try {
         const { assignment_id, session_date, period_number, start_time, end_time, records, saved_at } = req.body;
@@ -700,22 +1127,30 @@ router.get('/students/:assignmentId', async (req, res) => {
 
 // POST /api/faculty/attendance — Batch mark attendance
 router.post('/attendance', async (req, res) => {
+    const conn = await db.getConnection();
     try {
         const { assignment_id, date, records } = req.body;
         // records = [{ student_id, status }, ...]
         if (!assignment_id || !date || !records || records.length === 0) {
+            conn.release();
             return res.status(400).json({ error: 'Assignment ID, date, and records required' });
         }
 
+        await conn.beginTransaction();
+
         // Verify this assignment belongs to this faculty
-        const [assign] = await db.query('SELECT * FROM faculty_assignments WHERE id=? AND faculty_id=?', [assignment_id, req.user.id]);
-        if (assign.length === 0) return res.status(403).json({ error: 'Not your assignment' });
+        const [assign] = await conn.query('SELECT * FROM faculty_assignments WHERE id=? AND faculty_id=?', [assignment_id, req.user.id]);
+        if (assign.length === 0) {
+            await conn.rollback();
+            conn.release();
+            return res.status(403).json({ error: 'Not your assignment' });
+        }
 
         for (const r of records) {
-            await db.query(
+            await conn.query(
                 `INSERT INTO attendance (student_id, assignment_id, date, status, marked_by)
-         VALUES (?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE status=VALUES(status), edited_at=NOW()`,
+                 VALUES (?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE status=VALUES(status), edited_at=NOW()`,
                 [r.student_id, assignment_id, date, r.status, req.user.id]
             );
         }
@@ -724,43 +1159,36 @@ router.post('/attendance', async (req, res) => {
         const { sendMail, attendanceWarningEmail } = require('../utils/mailer');
         const { sendSMS, sendWhatsApp, attendanceWarningMessage } = require('../utils/sms');
 
-        const [alertConfig] = await db.query(
+        const [alertConfig] = await conn.query(
             'SELECT attendance_threshold, alert_channels FROM alert_config WHERE department_id=? OR department_id IS NULL ORDER BY department_id DESC LIMIT 1',
             [assign[0].department_id]
         );
         const threshold = alertConfig.length > 0 ? alertConfig[0].attendance_threshold : 75;
 
         // Recalculate for each student in this class
-        const [attStats] = await db.query(`
-      SELECT a.student_id, u.full_name, u.email, u.phone, sp.parent_email, sp.parent_phone,
-        COUNT(*) as total,
-        SUM(CASE WHEN a.status IN ('present','late') THEN 1 ELSE 0 END) as attended,
-        ROUND(SUM(CASE WHEN a.status IN ('present','late') THEN 1 ELSE 0 END)*100.0/COUNT(*), 2) as pct
-      FROM attendance a
-      JOIN users u ON a.student_id = u.id
-      JOIN student_profiles sp ON sp.user_id = u.id
-      WHERE a.assignment_id = ?
-      GROUP BY a.student_id
-      HAVING pct < ?
-    `, [assignment_id, threshold]);
+        const [attStats] = await conn.query(`
+            SELECT a.student_id, u.full_name, u.email, u.phone, sp.parent_email, sp.parent_phone,
+              COUNT(*) as total,
+              SUM(CASE WHEN a.status IN ('present','late') THEN 1 ELSE 0 END) as attended,
+              ROUND(SUM(CASE WHEN a.status IN ('present','late') THEN 1 ELSE 0 END)*100.0/COUNT(*), 2) as pct
+            FROM attendance a
+            JOIN users u ON a.student_id = u.id
+            JOIN student_profiles sp ON sp.user_id = u.id
+            WHERE a.assignment_id = ?
+            GROUP BY a.student_id
+            HAVING pct < ?
+        `, [assignment_id, threshold]);
 
-        const [subj] = await db.query('SELECT s.name FROM subjects s JOIN faculty_assignments fa ON fa.subject_id=s.id WHERE fa.id=?', [assignment_id]);
+        const [subj] = await conn.query('SELECT s.name FROM subjects s JOIN faculty_assignments fa ON fa.subject_id=s.id WHERE fa.id=?', [assignment_id]);
         const subjectName = subj.length > 0 ? subj[0].name : 'Unknown';
 
         // Check for recent alerts (avoid duplicates within 24h)
         for (const st of attStats) {
-            const [recent] = await db.query(
+            const [recent] = await conn.query(
                 "SELECT id FROM notifications WHERE recipient_id=? AND (type='alert' OR type='warning') AND reference_id=? AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)",
                 [st.student_id, assignment_id]
             );
             if (recent.length === 0) {
-                // In-portal notification
-                /*
-                await db.query(
-                    'INSERT INTO notifications (user_id, title, message, type, reference_id) VALUES (?,?,?,?,?)',
-                    [st.student_id, 'Attendance Warning', `Your attendance in ${subjectName} is ${st.pct}%`, 'alert', assignment_id]
-                );
-                */
                 const { sendNotification } = require('../utils/notificationService');
                 await sendNotification({
                     recipient_id: st.student_id,
@@ -769,7 +1197,7 @@ router.post('/attendance', async (req, res) => {
                     type: 'warning',
                     sender_role: req.user.role,
                     sender_id: req.user.id,
-                    target_url: `/student/attendance`
+                    target_url: '/student/attendance'
                 });
                 // Email
                 if (st.email) {
@@ -787,8 +1215,13 @@ router.post('/attendance', async (req, res) => {
             }
         }
 
+        await conn.commit();
+        conn.release();
+
         res.json({ message: 'Attendance marked', alerts_sent: attStats.length });
     } catch (err) {
+        await conn.rollback();
+        conn.release();
         console.error('Mark attendance error:', err);
         res.status(500).json({ error: 'Server error' });
     }
